@@ -1,0 +1,43 @@
+* { box-sizing: border-box; }
+html, body, #app { height: 100%; margin: 0; font-family: -apple-system, system-ui, sans-serif; font-size: 13px; }
+body { background: #1a1a1a; color: #ddd; }
+#app { display: flex; flex-direction: column; }
+#toolbar {
+  display: flex; align-items: center; gap: 6px;
+  padding: 8px 12px; background: #222; border-bottom: 1px solid #333;
+}
+#toolbar strong { margin-right: 12px; }
+#toolbar button {
+  background: #333; color: #eee; border: 1px solid #444;
+  padding: 5px 10px; border-radius: 4px; cursor: pointer;
+}
+#toolbar button:hover { background: #444; }
+#toolbar .sep { width: 1px; background: #444; align-self: stretch; margin: 0 6px; }
+#hint { margin-left: auto; color: #888; font-size: 11px; }
+#main { flex: 1; display: flex; min-height: 0; }
+#canvas-wrap { flex: 1; position: relative; }
+#canvas-wrap canvas { display: block; width: 100%; height: 100%; }
+#sidebar {
+  width: 260px; background: #222; border-left: 1px solid #333;
+  padding: 12px; overflow-y: auto;
+}
+#sidebar h3 { margin: 12px 0 6px; font-size: 12px; text-transform: uppercase; color: #888; }
+#sidebar h3:first-child { margin-top: 0; }
+#sel-props label { display: block; margin: 6px 0 2px; color: #aaa; font-size: 11px; }
+#sel-props input, #sel-props select {
+  width: 100%; background: #1a1a1a; color: #eee; border: 1px solid #444;
+  padding: 4px 6px; border-radius: 3px;
+}
+#sel-props .row { display: flex; gap: 4px; }
+#sel-props .row input { flex: 1; }
+#summary table { width: 100%; border-collapse: collapse; font-size: 11px; }
+#summary th, #summary td { text-align: left; padding: 2px 4px; border-bottom: 1px solid #333; }
+#summary th { color: #888; font-weight: normal; }
+#sel-empty { color: #666; font-style: italic; }
+.dragging #canvas-wrap { cursor: grabbing; }
+#marquee {
+  position: absolute; pointer-events: none; z-index: 10;
+  border: 2px dashed #00e5ff;
+  background: rgba(0, 229, 255, 0.12);
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.4) inset;
+}
