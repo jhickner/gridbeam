@@ -37,9 +37,17 @@ function snapPanelNormal(v) {
 }
 
 function snapPosFor(o, pos) {
-  if (o.type !== "panel") return pos.map(snap);
-  const nAxis = o.normal === "x" ? 0 : o.normal === "y" ? 1 : 2;
-  return pos.map((v, i) => (i === nAxis ? snapPanelNormal(v) : snap(v)));
+  let out;
+  if (o.type !== "panel") {
+    out = pos.map(snap);
+  } else {
+    const nAxis = o.normal === "x" ? 0 : o.normal === "y" ? 1 : 2;
+    out = pos.map((v, i) => (i === nAxis ? snapPanelNormal(v) : snap(v)));
+  }
+  // `pos` is the object's min corner, so pos[1] is its minimum Y. Clamp to
+  // the ground plane — no part of any object may dip below Y = 0.
+  if (out[1] < 0) out[1] = 0;
+  return out;
 }
 
 let nextId = 1;

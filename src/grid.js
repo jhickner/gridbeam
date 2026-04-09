@@ -30,12 +30,17 @@ export function holeOffsets(length) {
   return out;
 }
 
-// Format inches as fractional feet+inches-friendly string.
+// Format inches with common fractions down to 1/4" — enough for 0.75"
+// grid-beam hole offsets (3/4", 2 1/4", 3 3/4", ...).
 export function fmtIn(n) {
+  const neg = n < 0 ? "-" : "";
+  n = Math.abs(n);
   const whole = Math.floor(n);
-  const frac = n - whole;
-  const frac8 = Math.round(frac * 2); // halves are enough for 1.5" multiples
-  if (frac8 === 0) return `${whole}"`;
-  if (frac8 === 1) return `${whole} 1/2"`;
-  return `${whole + 1}"`;
+  const q = Math.round((n - whole) * 4); // quarters
+  const wholeFinal = q === 4 ? whole + 1 : whole;
+  const qFinal = q === 4 ? 0 : q;
+  const fracStr = qFinal === 0 ? "" : qFinal === 2 ? " 1/2" : qFinal === 1 ? " 1/4" : " 3/4";
+  // Don't show a leading 0 when we only have a fraction: "3/4"" instead of "0 3/4"".
+  const body = wholeFinal === 0 && fracStr ? fracStr.trim() : `${wholeFinal}${fracStr}`;
+  return `${neg}${body}"`;
 }

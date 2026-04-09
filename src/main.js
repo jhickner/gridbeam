@@ -93,7 +93,7 @@ function rebuildMeshes(doc) {
   meshById.clear();
   for (const o of doc.objects) {
     const g = o.type === "beam"
-      ? buildBeamMesh(o, boltedHoles.get(o.id))
+      ? buildBeamMesh(o, boltedHoles.get(o.id), minimalMode)
       : buildPanelMesh(o);
     root.add(g);
     meshById.set(o.id, g);
@@ -143,6 +143,10 @@ const planeAtY = (y) => new THREE.Plane(new THREE.Vector3(0, 1, 0), -y);
 //                so we can move them all by the same delta (and restore on shift-lock)
 let drag = null;
 let clipboard = null; // array of plain-object snapshots (no ids)
+
+// Minimal-hole mode: when on, beams render only the holes required by bolted
+// connections, and the exported plan includes drilling instructions.
+let minimalMode = localStorage.getItem("gridbeam.minimalMode") === "1";
 
 // Marquee (rubber-band) selection: hold Alt/Option and drag a rectangle over
 // the canvas. Shift+Alt adds to the current selection instead of replacing.
@@ -231,7 +235,7 @@ function finishMarquee() {
 function onPointerDown(e) {
   if (e.button !== 0) return;
 
-  // Alt/Option = rubber-band selection. Ignores whatever is under the cursor.
+  // Alt/Option = rubber-band selection instead of orbit/drag.
   if (e.altKey) {
     const rect = wrap.getBoundingClientRect();
     marquee = {
@@ -622,10 +626,23 @@ fileInput.onchange = async () => {
 document.getElementById("btn-export").onclick = () => {
   renderer.render(scene, camera);
   const data = renderer.domElement.toDataURL("image/png");
-  openExportView(getDoc(), data);
+  openExportView(getDoc(), data, { minimalMode });
 };
 document.getElementById("btn-clear").onclick = () => {
   if (confirm("Clear all objects?")) { clearAll(); selectedIds.clear(); }
+};
+
+const btnMinimal = document.getElementById("btn-minimal");
+function syncMinimalButton() {
+  btnMinimal.textContent = "Minimal Holes: " + (minimalMode ? "on" : "off");
+  btnMinimal.style.background = minimalMode ? "#55371f" : "";
+}
+syncMinimalButton();
+btnMinimal.onclick = () => {
+  minimalMode = !minimalMode;
+  localStorage.setItem("gridbeam.minimalMode", minimalMode ? "1" : "0");
+  syncMinimalButton();
+  rebuildMeshes(getDoc());
 };
 
 // ------- View persistence -------

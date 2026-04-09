@@ -7,9 +7,11 @@ const holeMat = new THREE.MeshBasicMaterial({ color: 0x1a1a1a });
 const boltHoleMat = new THREE.MeshBasicMaterial({ color: 0xff3b30 });
 
 // Returns a Group positioned so its local origin is the beam's min-corner.
-// `boltedIdx` is an optional Set<number> of hole indices that should be
-// rendered in the "bolted" color (indices match beamHoleWorldPositions order).
-export function buildBeamMesh(o, boltedIdx) {
+// `boltedIdx` is an optional Set<"idx|axis"> listing which holes are bolted.
+// `minimalMode` = true → only the bolted holes are drilled; no decorative
+// full-length hole row. Used when the user wants a "drill only what's needed"
+// build.
+export function buildBeamMesh(o, boltedIdx, minimalMode = false) {
   const group = new THREE.Group();
   group.userData.id = o.id;
   group.userData.type = "beam";
@@ -24,25 +26,41 @@ export function buildBeamMesh(o, boltedIdx) {
   box.userData.id = o.id;
   group.add(box);
 
-  // Slightly larger radius so the highlight reads at a distance.
   const holeGeom = new THREE.CylinderGeometry(0.22, 0.22, BEAM_SIZE * 1.04, 12);
   const offs = holeOffsets(length);
-  for (let i = 0; i < offs.length; i++) {
+
+  // Place one cylinder at (hole index i, through-axis p). Axis letter maps to
+  // cylinder orientation: y is the default, x rotates around Z, z around X.
+  const placeCylinder = (i, p, mat) => {
     const off = offs[i];
+    if (off === undefined) return;
     const cx = axis === "x" ? off : BEAM_SIZE / 2;
     const cy = axis === "y" ? off : BEAM_SIZE / 2;
     const cz = axis === "z" ? off : BEAM_SIZE / 2;
+    const m = new THREE.Mesh(holeGeom, mat);
+    m.position.set(cx, cy, cz);
+    if (p === "x") m.rotation.z = Math.PI / 2;
+    else if (p === "z") m.rotation.x = Math.PI / 2;
+    m.raycast = () => {};
+    group.add(m);
+  };
+
+  if (minimalMode) {
+    // Only drill the holes required by bolted connections.
+    if (boltedIdx) {
+      for (const entry of boltedIdx) {
+        const [iStr, ax] = entry.split("|");
+        placeCylinder(+iStr, ax, boltHoleMat);
+      }
+    }
+  } else {
+    // Full grid beam: two perpendicular holes at every hole position.
     const perps = axis === "x" ? ["y", "z"] : axis === "y" ? ["x", "z"] : ["x", "y"];
-    for (const p of perps) {
-      // Highlight only the cylinder whose through-axis matches the bolt direction
-      // recorded by connections.js — i.e. the one perpendicular to the touching face.
-      const isBolted = boltedIdx && boltedIdx.has(`${i}|${p}`);
-      const m = new THREE.Mesh(holeGeom, isBolted ? boltHoleMat : holeMat);
-      m.position.set(cx, cy, cz);
-      if (p === "x") m.rotation.z = Math.PI / 2;
-      else if (p === "z") m.rotation.x = Math.PI / 2;
-      m.raycast = () => {};
-      group.add(m);
+    for (let i = 0; i < offs.length; i++) {
+      for (const p of perps) {
+        const isBolted = boltedIdx && boltedIdx.has(`${i}|${p}`);
+        placeCylinder(i, p, isBolted ? boltHoleMat : holeMat);
+      }
     }
   }
 

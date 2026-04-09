@@ -1,5 +1,5 @@
 import { computeConnections } from "./connections.js";
-import { fmtIn } from "./grid.js";
+import { fmtIn, holeOffsets } from "./grid.js";
 
 // First-Fit-Decreasing bin-packing of cut lengths into stock boards.
 // `cuts` is a flat array of individual required lengths (qty already expanded).
@@ -30,10 +30,10 @@ export function expandCuts(cutRows) {
   return out;
 }
 
-export function computeBom(doc) {
+export function computeBom(doc, { minimalMode = false } = {}) {
   const beams = doc.objects.filter((o) => o.type === "beam");
   const panels = doc.objects.filter((o) => o.type === "panel");
-  const { bolts } = computeConnections(doc);
+  const { bolts, boltedHoles } = computeConnections(doc);
 
   const cutList = {};
   for (const b of beams) cutList[b.length] = (cutList[b.length] || 0) + 1;
@@ -57,5 +57,35 @@ export function computeBom(doc) {
     { item: "Hex nut", qty: nConn },
   ];
 
-  return { cutRows, panelRows, hardware, nConn, fmtIn };
+  // Minimal-mode drilling instructions: grouped purely by beam length and
+  // hole pattern. Each hole is measured as the distance from the nearest
+  // end of the beam (since a 2×2 can be flipped end-for-end during layout)
+  // and drilling direction is irrelevant — a through-hole in a 2×2 serves
+  // any bolt axis. Beams with identical patterns after this normalization
+  // are merged into a single row with a qty count.
+  let drillingRows = null;
+  if (minimalMode) {
+    const groups = new Map();
+    for (const b of beams) {
+      const entries = boltedHoles.get(b.id) || new Set();
+      const offs = holeOffsets(b.length);
+      // Deduplicate hole indices (multiple bolt axes at the same position
+      // collapse into a single drilled hole).
+      const indices = new Set();
+      for (const e of entries) indices.add(+e.split("|")[0]);
+      const holes = [];
+      for (const i of indices) {
+        const off = offs[i];
+        if (off === undefined) continue;
+        holes.push(+Math.min(off, b.length - off).toFixed(3));
+      }
+      holes.sort((a, b) => a - b);
+      const key = b.length + "|" + holes.join(",");
+      if (!groups.has(key)) groups.set(key, { length: b.length, holes, qty: 0 });
+      groups.get(key).qty++;
+    }
+    drillingRows = [...groups.values()].sort((a, b) => b.length - a.length);
+  }
+
+  return { cutRows, panelRows, hardware, nConn, fmtIn, drillingRows };
 }
