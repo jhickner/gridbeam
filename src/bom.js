@@ -50,11 +50,13 @@ export function computeBom(doc, { minimalMode = false } = {}) {
   const panelRows = Object.values(panelList).sort((a, b) => b.w * b.h - a.w * a.h);
 
   const nConn = bolts.length;
+  const nScrews = panels.length * 4; // one screw per corner
   const hardware = [
     { item: "Bolt (1/4\"-20, user length)", qty: nConn },
     { item: "Flat washer", qty: nConn },
     { item: "Lock washer", qty: nConn },
     { item: "Hex nut", qty: nConn },
+    { item: "Wood screw (panels)", qty: nScrews },
   ];
 
   // Minimal-mode drilling instructions: grouped purely by beam length and
@@ -126,13 +128,27 @@ function tryPlace(sheet, pw, ph) {
   const r = sheet.rects[bestIdx];
   sheet.cuts.push({ w: bestPw, h: bestPh, x: r.x, y: r.y });
   sheet.rects.splice(bestIdx, 1);
-  // Right remainder
-  if (r.w - bestPw > 1e-6) {
-    sheet.rects.push({ x: r.x + bestPw, y: r.y, w: r.w - bestPw, h: bestPh });
-  }
-  // Bottom remainder (full width of original rect, not just panel width)
-  if (r.h - bestPh > 1e-6) {
-    sheet.rects.push({ x: r.x, y: r.y + bestPh, w: r.w, h: r.h - bestPh });
+
+  const remW = r.w - bestPw;
+  const remH = r.h - bestPh;
+
+  // After placing a panel in the top-left corner of the free rect, the
+  // remaining L-shape must be split into two rectangles. Two options:
+  //   A (horizontal): (remW × bestPh) right  + (r.w × remH) bottom
+  //   B (vertical):   (remW × r.h)    right  + (bestPw × remH) bottom
+  // Pick whichever yields the single largest contiguous piece so leftover
+  // material stays usable for future cuts.
+  const maxA = Math.max(remW * bestPh, r.w * remH);
+  const maxB = Math.max(remW * r.h, bestPw * remH);
+
+  if (maxA >= maxB) {
+    // Horizontal split (A): bottom gets full width.
+    if (remW > 1e-6) sheet.rects.push({ x: r.x + bestPw, y: r.y, w: remW, h: bestPh });
+    if (remH > 1e-6) sheet.rects.push({ x: r.x, y: r.y + bestPh, w: r.w, h: remH });
+  } else {
+    // Vertical split (B): right gets full height.
+    if (remW > 1e-6) sheet.rects.push({ x: r.x + bestPw, y: r.y, w: remW, h: r.h });
+    if (remH > 1e-6) sheet.rects.push({ x: r.x, y: r.y + bestPh, w: bestPw, h: remH });
   }
   return true;
 }

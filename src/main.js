@@ -60,7 +60,6 @@ scene.add(boltsGroup);
 
 const boltGeom = new THREE.SphereGeometry(0.35, 12, 10);
 const beamBoltMat = new THREE.MeshBasicMaterial({ color: 0xffd24a });
-const panelBoltMat = new THREE.MeshBasicMaterial({ color: 0x4acfff });
 
 // ------- Multi-selection -------
 const selectedIds = new Set();
@@ -104,7 +103,7 @@ function rebuildMeshes(doc) {
 
   boltsGroup.clear();
   for (const c of bolts) {
-    const s = new THREE.Mesh(boltGeom, c.kind === "beam-beam" ? beamBoltMat : panelBoltMat);
+    const s = new THREE.Mesh(boltGeom, beamBoltMat);
     s.position.set(c.pos[0], c.pos[1], c.pos[2]);
     boltsGroup.add(s);
   }

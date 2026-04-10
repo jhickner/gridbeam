@@ -31,11 +31,55 @@ export function openExportView(doc, screenshotDataUrl, { minimalMode = false } =
     if (panelPack.oversize.length) {
       summary += `<div class="warn">⚠ ${panelPack.oversize.length} panel(s) exceed 4'×8' sheet size</div>`;
     }
+    // Generate SVG cut diagrams for each sheet.
+    // Scale: fit 48"×96" sheet into a reasonable on-screen width.
+    const SVG_W = 380;                         // px width of each diagram
+    const SCALE = SVG_W / 48;                  // px per inch (sheet short side = width)
+    const SVG_H = Math.round(96 * SCALE);      // px height
+
+    // Distinct colors for each cut so they're visually separable.
+    const palette = [
+      "#5b8fb9", "#b95b5b", "#6db95b", "#b9a05b", "#8f5bb9",
+      "#5bb9a8", "#b96a8c", "#7ab95b", "#5b6fb9", "#b98a5b",
+    ];
+
+    const sheetDiagrams = panelPack.sheets.map((sh, si) => {
+      let rects = "";
+      sh.cuts.forEach((c, ci) => {
+        const x = c.x * SCALE;
+        const y = c.y * SCALE;
+        const w = c.w * SCALE;
+        const h = c.h * SCALE;
+        const fill = palette[ci % palette.length];
+        rects += `<rect x="${x}" y="${y}" width="${w}" height="${h}" fill="${fill}" fill-opacity="0.35" stroke="${fill}" stroke-width="1.5"/>`;
+        // Dimension label centered in the rectangle.
+        const label = `${fmtIn(c.w)} × ${fmtIn(c.h)}`;
+        const cx = x + w / 2, cy = y + h / 2;
+        // Only show label if rect is big enough to read.
+        if (w > 35 && h > 16) {
+          rects += `<text x="${cx}" y="${cy}" text-anchor="middle" dominant-baseline="central" `
+                +  `fill="#eee" font-size="11" font-family="ui-monospace,Menlo,monospace">${label}</text>`;
+        }
+      });
+      return `
+        <div style="margin-top:12px;">
+          <div style="color:#aaa;font-size:12px;margin-bottom:4px;">Sheet #${si + 1}
+            <span style="color:#666;font-size:11px;">(4' × 8')</span></div>
+          <svg width="${SVG_W}" height="${SVG_H}" viewBox="0 0 ${SVG_W} ${SVG_H}"
+               style="background:#111;border:1px solid #333;border-radius:4px;">
+            ${rects}
+            <!-- Sheet outline -->
+            <rect x="0" y="0" width="${SVG_W}" height="${SVG_H}" fill="none" stroke="#555" stroke-width="1" stroke-dasharray="4 2"/>
+          </svg>
+        </div>`;
+    }).join("");
+
     const sheetRows = panelPack.sheets.map((sh, i) =>
       `<tr class="board-row"><td>#${i + 1}</td><td>${
-        sh.cuts.map((c) => `${fmtIn(c.w)} × ${fmtIn(c.h)}`).join(" + ")
+        sh.cuts.map((c) => `${fmtIn(c.w)} × ${fmtIn(c.h)}`).join(" &nbsp;+&nbsp; ")
       }</td></tr>`
     ).join("");
+
     panelStockHtml = `
       <h2>Panel Sheet Plan</h2>
       <div class="summary">${summary}</div>
@@ -43,6 +87,7 @@ export function openExportView(doc, screenshotDataUrl, { minimalMode = false } =
         <thead><tr><th style="width:70px;">Sheet</th><th>Cuts</th></tr></thead>
         <tbody>${sheetRows}</tbody>
       </table>
+      ${sheetDiagrams}
     `;
   }
 
