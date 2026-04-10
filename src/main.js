@@ -6,6 +6,7 @@ import {
   getDoc, getObject, subscribe,
   addBeam, addPanel, addFixture, updateObject, removeObject, removeObjects, clearAll,
   setPosLive, beginLive, endLive, undo, redo, rotateSelectionY90, bbox,
+  groupObjects, ungroupObjects, groupMembers,
 } from "./state.js";
 import { buildBeamMesh } from "./beam.js";
 import { buildPanelMesh } from "./panel.js";
@@ -226,7 +227,10 @@ function finishMarquee() {
       const sb = screenBoxOfMesh(g);
       if (!sb) continue;
       const overlap = sb.maxX >= mx1 && sb.minX <= mx2 && sb.maxY >= my1 && sb.minY <= my2;
-      if (overlap) selectedIds.add(id);
+      if (overlap) {
+        // Include entire group when any member is hit.
+        for (const m of groupMembers(id)) selectedIds.add(m);
+      }
     }
   } else if (!marquee.additive) {
     selectedIds.clear();
@@ -264,13 +268,20 @@ function onPointerDown(e) {
   // preserved; clear it explicitly with Esc or by clicking another object.
   if (!id) return;
 
-  // Shift-click: toggle this id in the selection.
-  // Plain click on an already-selected object: keep the group (so drag moves all).
-  // Plain click on an unselected object: replace selection with just this id.
+  // Shift-click: toggle this id (and its group) in the selection.
+  // Plain click on an already-selected object: keep the selection (so drag moves all).
+  // Plain click on an unselected object: replace selection with this id + group members.
+  const members = groupMembers(id);
   if (e.shiftKey) {
-    toggleSel(id);
+    // Toggle: if already selected remove the whole group, else add it.
+    if (selectedIds.has(id)) {
+      for (const m of members) selectedIds.delete(m);
+    } else {
+      for (const m of members) selectedIds.add(m);
+    }
   } else if (!selectedIds.has(id)) {
-    selectOnly(id);
+    selectedIds.clear();
+    for (const m of members) selectedIds.add(m);
   }
   refreshOutlines();
   refreshSidebar();
@@ -376,6 +387,18 @@ window.addEventListener("keydown", (e) => {
   if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "z") {
     e.preventDefault();
     if (e.shiftKey) redo(); else undo();
+    return;
+  }
+
+  // Group / ungroup.
+  if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "g") {
+    e.preventDefault();
+    if (e.shiftKey) {
+      ungroupObjects([...selectedIds]);
+    } else {
+      groupObjects([...selectedIds]);
+    }
+    refreshSidebar();
     return;
   }
 
@@ -511,8 +534,15 @@ function refreshSidebar() {
       }
     }
     const dx = max[0] - min[0], dy = max[1] - min[1], dz = max[2] - min[2];
+    // Check if selection is a single group.
+    const groups = new Set();
+    for (const id of selectedIds) { const o = getObject(id); if (o && o.group) groups.add(o.group); }
+    const isGrouped = groups.size === 1 && selectedIds.size === groupMembers([...selectedIds][0]).length;
+
     elSelProps.innerHTML = `
-      <div><strong>${selectedIds.size} objects selected</strong></div>
+      <div><strong>${selectedIds.size} objects selected</strong>
+        ${isGrouped ? '<span style="color:#4acfff;font-size:11px;"> (grouped)</span>' : ""}
+      </div>
       <div style="margin-top:6px;">
         <div style="color:#aaa;font-size:11px;">Extent W × D × H</div>
         <div style="font-family:ui-monospace,Menlo,monospace;">
@@ -520,7 +550,8 @@ function refreshSidebar() {
         </div>
       </div>
       <div style="color:#888;font-size:11px;margin-top:8px;">
-        Drag to move · R group-rotate · Q/E raise/lower · arrows nudge · Del
+        Drag to move · R group-rotate · Q/E raise/lower · arrows nudge · Del<br>
+        ${isGrouped ? "⌘⇧G ungroup" : "⌘G group"}
       </div>
     `;
     return;

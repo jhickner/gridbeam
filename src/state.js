@@ -139,6 +139,40 @@ export function removeObjects(ids) {
   emit();
 }
 
+// ------- Grouping -------
+let nextGroupId = 1;
+function newGroupId() { return `g${nextGroupId++}`; }
+
+// Assign all `ids` to a new group. One undo step.
+export function groupObjects(ids) {
+  if (!ids || ids.length < 2) return;
+  pushUndo();
+  const gid = newGroupId();
+  for (const id of ids) {
+    const o = getObject(id);
+    if (o) o.group = gid;
+  }
+  emit();
+}
+
+// Remove the group tag from all `ids`. One undo step.
+export function ungroupObjects(ids) {
+  if (!ids || !ids.length) return;
+  pushUndo();
+  for (const id of ids) {
+    const o = getObject(id);
+    if (o) delete o.group;
+  }
+  emit();
+}
+
+// Return all object ids that share a group with `id`.
+export function groupMembers(id) {
+  const o = getObject(id);
+  if (!o || !o.group) return [id];
+  return doc.objects.filter((x) => x.group === o.group).map((x) => x.id);
+}
+
 export function clearAll() {
   pushUndo();
   doc = freshDoc();
@@ -155,13 +189,16 @@ export function loadDoc(next) {
       o.w = cw; o.h = ch;
     }
   }
-  // Re-seed id counter so new ids don't collide.
-  let max = 0;
+  // Re-seed id/group counters so new ones don't collide.
+  let max = 0, gmax = 0;
   for (const o of doc.objects) {
     const m = /^o(\d+)$/.exec(o.id || "");
     if (m) max = Math.max(max, +m[1]);
+    const gm = /^g(\d+)$/.exec(o.group || "");
+    if (gm) gmax = Math.max(gmax, +gm[1]);
   }
   nextId = max + 1;
+  nextGroupId = gmax + 1;
   emit();
 }
 
