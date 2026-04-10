@@ -96,7 +96,7 @@ function rebuildMeshes(doc) {
       ? buildBeamMesh(o, boltedHoles.get(o.id), minimalMode)
       : o.type === "fixture"
       ? buildFixtureMesh(o)
-      : buildPanelMesh(o);
+      : buildPanelMesh(o, clippedCorners);
     root.add(g);
     meshById.set(o.id, g);
   }
@@ -116,7 +116,10 @@ function rebuildMeshes(doc) {
   refreshSummary();
 }
 
-subscribe((doc) => rebuildMeshes(doc));
+subscribe((doc) => {
+  try { rebuildMeshes(doc); }
+  catch (e) { console.error("rebuildMeshes failed:", e); }
+});
 
 // ------- Picking & dragging -------
 const raycaster = new THREE.Raycaster();
@@ -149,6 +152,7 @@ let clipboard = null; // array of plain-object snapshots (no ids)
 // Minimal-hole mode: when on, beams render only the holes required by bolted
 // connections, and the exported plan includes drilling instructions.
 let minimalMode = localStorage.getItem("gridbeam.minimalMode") === "1";
+let clippedCorners = localStorage.getItem("gridbeam.clippedCorners") === "1";
 
 // Marquee (rubber-band) selection: hold Alt/Option and drag a rectangle over
 // the canvas. Shift+Alt adds to the current selection instead of replacing.
@@ -675,6 +679,19 @@ btnMinimal.onclick = () => {
   minimalMode = !minimalMode;
   localStorage.setItem("gridbeam.minimalMode", minimalMode ? "1" : "0");
   syncMinimalButton();
+  rebuildMeshes(getDoc());
+};
+
+const btnClipped = document.getElementById("btn-clipped");
+function syncClippedButton() {
+  btnClipped.textContent = "Clipped Corners: " + (clippedCorners ? "on" : "off");
+  btnClipped.style.background = clippedCorners ? "#55371f" : "";
+}
+syncClippedButton();
+btnClipped.onclick = () => {
+  clippedCorners = !clippedCorners;
+  localStorage.setItem("gridbeam.clippedCorners", clippedCorners ? "1" : "0");
+  syncClippedButton();
   rebuildMeshes(getDoc());
 };
 

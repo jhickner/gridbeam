@@ -51,12 +51,15 @@ function pushUndo() {
 
 export function undo() {
   if (!undoStack.length) return;
+  // Clear any in-progress drag so it doesn't corrupt the stack.
+  dragSnapshot = null;
   redoStack.push(clone(doc));
   doc = undoStack.pop();
   emit();
 }
 export function redo() {
   if (!redoStack.length) return;
+  dragSnapshot = null;
   undoStack.push(clone(doc));
   doc = redoStack.pop();
   emit();
