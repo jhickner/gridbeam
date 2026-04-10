@@ -13,6 +13,14 @@ body { background: #1a1a1a; color: #ddd; }
 }
 #toolbar button:hover { background: #444; }
 #toolbar .sep { width: 1px; background: #444; align-self: stretch; margin: 0 6px; }
+.mode-group { display: flex; gap: 0; margin-right: 4px; }
+.mode-btn {
+  background: #333; color: #888; border: 1px solid #444;
+  padding: 5px 10px; cursor: pointer; font-size: 12px;
+}
+.mode-btn:first-child { border-radius: 4px 0 0 4px; }
+.mode-btn:last-child { border-radius: 0 4px 4px 0; border-left: none; }
+.mode-btn.active { background: #4a6a8a; color: #fff; border-color: #5a8aba; }
 #hint { margin-left: auto; color: #888; font-size: 11px; }
 #main { flex: 1; display: flex; min-height: 0; }
 #canvas-wrap { flex: 1; position: relative; }

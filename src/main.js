@@ -150,6 +150,9 @@ const planeAtY = (y) => new THREE.Plane(new THREE.Vector3(0, 1, 0), -y);
 let drag = null;
 let clipboard = null; // array of plain-object snapshots (no ids)
 
+// Interaction mode: "orbit" (default) or "select" (marquee on empty-space drag).
+let interactionMode = localStorage.getItem("gridbeam.mode") || "orbit";
+
 // Minimal-hole mode: when on, beams render only the holes required by bolted
 // connections, and the exported plan includes drilling instructions.
 let minimalMode = localStorage.getItem("gridbeam.minimalMode") === "1";
@@ -264,9 +267,25 @@ function onPointerDown(e) {
 
   const id = pickObjectId(e);
 
-  // Clicking empty space = let OrbitControls rotate the view. Selection is
-  // preserved; clear it explicitly with Esc or by clicking another object.
-  if (!id) return;
+  // Empty space: in select mode start a marquee; in orbit mode let
+  // OrbitControls handle the gesture.
+  if (!id) {
+    if (interactionMode === "select") {
+      const rect = wrap.getBoundingClientRect();
+      marquee = {
+        startX: e.clientX - rect.left,
+        startY: e.clientY - rect.top,
+        curX: e.clientX - rect.left,
+        curY: e.clientY - rect.top,
+        el: makeMarqueeEl(),
+        additive: e.shiftKey,
+      };
+      updateMarqueeEl();
+      controls.enabled = false;
+      e.preventDefault();
+    }
+    return;
+  }
 
   // Shift-click: toggle this id (and its group) in the selection.
   // Plain click on an already-selected object: keep the selection (so drag moves all).
@@ -379,6 +398,16 @@ function mutateSelection(fn) {
   endLive();
 }
 
+// Check whether a Y-delta would push any selected object below the ground
+// plane. Returns true if the move is safe.
+function canMoveSelY(dy) {
+  for (const id of selectedIds) {
+    const o = getObject(id);
+    if (o && o.pos[1] + dy < -0.001) return false;
+  }
+  return true;
+}
+
 window.addEventListener("keydown", (e) => {
   const tag = (e.target && e.target.tagName) || "";
   if (tag === "INPUT" || tag === "SELECT" || tag === "TEXTAREA") return;
@@ -427,13 +456,22 @@ window.addEventListener("keydown", (e) => {
   }
   if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "v") {
     if (!clipboard || !clipboard.length) return;
+    // Map old group ids → fresh group ids so pasted groups stay grouped
+    // but don't merge with the originals.
+    const groupMap = new Map();
     const newIds = [];
     for (const c of clipboard) {
-      // Offset each paste from its source so they don't land on top.
       const pos = [c.pos[0] + SNAP * 2, c.pos[1], c.pos[2] + SNAP * 2];
-      if (c.type === "beam") newIds.push(addBeam({ length: c.length, axis: c.axis, pos }));
-      else if (c.type === "fixture") newIds.push(addFixture({ kind: c.kind, axis: c.axis, pos }));
-      else if (c.type === "panel") newIds.push(addPanel({ w: c.w, h: c.h, normal: c.normal, pos }));
+      let newId;
+      if (c.type === "beam") newId = addBeam({ length: c.length, axis: c.axis, pos });
+      else if (c.type === "fixture") newId = addFixture({ kind: c.kind, axis: c.axis, pos });
+      else if (c.type === "panel") newId = addPanel({ w: c.w, h: c.h, normal: c.normal, pos });
+      if (newId && c.group) {
+        if (!groupMap.has(c.group)) groupMap.set(c.group, `g${Date.now()}_${groupMap.size}`);
+        const o = getObject(newId);
+        if (o) o.group = groupMap.get(c.group);
+      }
+      if (newId) newIds.push(newId);
     }
     selectedIds.clear();
     for (const id of newIds) selectedIds.add(id);
@@ -475,6 +513,7 @@ window.addEventListener("keydown", (e) => {
     return;
   }
   if (e.key === "q" || e.key === "Q") {
+    if (!canMoveSelY(-SNAP)) return;
     mutateSelection((o) =>
       updateObject(o.id, { pos: [o.pos[0], o.pos[1] - SNAP, o.pos[2]] }, { commit: false }));
     return;
@@ -678,6 +717,17 @@ document.getElementById("btn-add-panel").onclick = () => {
   localStorage.setItem(LAST_PANEL_KEY, lastPanelDims);
   selectOnly(addPanel({ w: parseFloat(m[1]), h: parseFloat(m[2]), pos: [0, 0, 0] }));
 };
+// ------- Mode toggle -------
+const btnOrbit = document.getElementById("btn-mode-orbit");
+const btnSelect = document.getElementById("btn-mode-select");
+function syncModeButtons() {
+  btnOrbit.classList.toggle("active", interactionMode === "orbit");
+  btnSelect.classList.toggle("active", interactionMode === "select");
+}
+syncModeButtons();
+btnOrbit.onclick = () => { interactionMode = "orbit"; localStorage.setItem("gridbeam.mode", "orbit"); syncModeButtons(); };
+btnSelect.onclick = () => { interactionMode = "select"; localStorage.setItem("gridbeam.mode", "select"); syncModeButtons(); };
+
 document.getElementById("btn-undo").onclick = undo;
 document.getElementById("btn-redo").onclick = redo;
 document.getElementById("btn-save").onclick = downloadJson;
