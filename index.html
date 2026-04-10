@@ -19,6 +19,8 @@
       <strong>Grid Beam Editor</strong>
       <button id="btn-add-beam">+ Beam</button>
       <button id="btn-add-panel">+ Panel</button>
+      <!-- Fixture buttons are generated from src/fixtures.js and inserted here -->
+      <button id="btn-add-mattress" hidden></button>
       <span class="sep"></span>
       <button id="btn-undo" title="Cmd/Ctrl+Z">Undo</button>
       <button id="btn-redo" title="Shift+Cmd/Ctrl+Z">Redo</button>
@@ -30,7 +32,7 @@
       <span class="sep"></span>
       <button id="btn-clear">Clear</button>
       <button id="btn-minimal" title="Drill only the holes needed for connections">Minimal Holes: off</button>
-      <span id="hint">drag: place · R: rotate · Q/E: down/up · [ / ]: shrink/grow · Del: delete</span>
+      <span id="hint">drag · R rotate · Q/E up/dn · [ ] resize · Del</span>
     </header>
     <div id="main">
       <div id="canvas-wrap"></div>

@@ -84,19 +84,37 @@ export function computeConnections(doc) {
   }
 
   // --- Beam-to-panel (every 3rd hole along the shared region) ---
+  // A panel is "flush" with a beam face when that face lies within the
+  // panel's 0.25" thickness on the normal axis. This handles both grid-
+  // aligned placement (panel pmin = beam face) and offset placement (panel
+  // pmax = beam face) without requiring an exact boundary-to-boundary match.
   for (const P of panels) {
     const [pmin, pmax] = panelAabb(P);
     const nAxis = P.normal === "x" ? 0 : P.normal === "y" ? 1 : 2;
     for (const B of beams) {
       const [bmin, bmax] = beamAabb(B);
-      const flush = near(bmax[nAxis], pmin[nAxis]) || near(pmax[nAxis], bmin[nAxis]);
-      if (!flush) continue;
+
+      // Skip if the panel is touching a beam END (the face perpendicular to
+      // the beam's long axis). Bolts only attach to the beam's side faces.
+      const beamAxisIdx = B.axis === "x" ? 0 : B.axis === "y" ? 1 : 2;
+      if (nAxis === beamAxisIdx) continue;
+
+      // Check if either beam face on the normal axis falls inside the panel slab.
+      const topInside  = bmax[nAxis] >= pmin[nAxis] - EPS && bmax[nAxis] <= pmax[nAxis] + EPS;
+      const botInside  = bmin[nAxis] >= pmin[nAxis] - EPS && bmin[nAxis] <= pmax[nAxis] + EPS;
+      if (!topInside && !botInside) continue;
+
+      // Overlap on the other two axes.
       let overlap = true;
       for (let k = 0; k < 3; k++) {
         if (k === nAxis) continue;
         if (bmax[k] <= pmin[k] + EPS || pmax[k] <= bmin[k] + EPS) { overlap = false; break; }
       }
       if (!overlap) continue;
+
+      // Pick the beam face position for bolt placement (the one the panel
+      // is actually flush against).
+      const facePos = topInside ? bmax[nAxis] : bmin[nAxis];
 
       const holes = beamHoleWorldPositions(B);
       let count = 0;
@@ -110,7 +128,7 @@ export function computeConnections(doc) {
         if (!inside) continue;
         if (count % 3 === 0) {
           const mid = h.slice();
-          mid[nAxis] = near(bmax[nAxis], pmin[nAxis]) ? bmax[nAxis] : bmin[nAxis];
+          mid[nAxis] = facePos;
           if (addBolt(mid, "beam-panel")) markHole(B.id, hi, AXIS_LETTER[nAxis]);
         }
         count++;

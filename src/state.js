@@ -1,49 +1,22 @@
 // Document model + undo/redo + pub-sub.
-import { snap, snapLength, BEAM_SIZE, SNAP, PANEL_THICK } from "./grid.js";
+import { snap, snapLength, BEAM_SIZE, SNAP } from "./grid.js";
+import { fixtureDims } from "./fixtures.js";
 
 // 1/4" hardboard sheets come as 4'×8'. Either dimension may be the long one,
 // but the smaller must be ≤ 48" and the larger ≤ 96".
 const PANEL_MAX_LONG = 96;
 const PANEL_MAX_SHORT = 48;
 function clampPanel(w, h) {
-  w = Math.min(Math.max(snap(w), SNAP), PANEL_MAX_LONG);
-  h = Math.min(Math.max(snap(h), SNAP), PANEL_MAX_LONG);
+  w = isFinite(w) ? Math.min(Math.max(snap(w), SNAP), PANEL_MAX_LONG) : SNAP;
+  h = isFinite(h) ? Math.min(Math.max(snap(h), SNAP), PANEL_MAX_LONG) : SNAP;
   if (w > PANEL_MAX_SHORT && h > PANEL_MAX_SHORT) {
     if (w <= h) w = PANEL_MAX_SHORT; else h = PANEL_MAX_SHORT;
   }
   return [w, h];
 }
 
-// Panels are 0.25" thick but the world snaps to 1.5". To let a panel attach
-// to *either* side of a beam, its position along the normal axis may land on
-// a grid line (pmin on grid → panel is on the +side) OR on a grid line minus
-// PANEL_THICK (pmax on grid → panel is on the −side). Both faces stay
-// grid-aligned; the other two axes snap normally.
-function snapPanelNormal(v) {
-  const k = v / SNAP;
-  const kLo = Math.floor(k), kHi = kLo + 1;
-  const candidates = [
-    kLo * SNAP,                 // pmin on grid
-    kLo * SNAP - PANEL_THICK,   // pmax on grid (shifted down)
-    kHi * SNAP,
-    kHi * SNAP - PANEL_THICK,
-  ];
-  let best = candidates[0], bd = Math.abs(v - best);
-  for (const c of candidates) {
-    const d = Math.abs(v - c);
-    if (d < bd) { best = c; bd = d; }
-  }
-  return +best.toFixed(4);
-}
-
 function snapPosFor(o, pos) {
-  let out;
-  if (o.type !== "panel") {
-    out = pos.map(snap);
-  } else {
-    const nAxis = o.normal === "x" ? 0 : o.normal === "y" ? 1 : 2;
-    out = pos.map((v, i) => (i === nAxis ? snapPanelNormal(v) : snap(v)));
-  }
+  const out = pos.map(snap);
   // `pos` is the object's min corner, so pos[1] is its minimum Y. Clamp to
   // the ground plane — no part of any object may dip below Y = 0.
   if (out[1] < 0) out[1] = 0;
@@ -92,6 +65,15 @@ export function redo() {
 export function addBeam({ length = 12, axis = "x", pos = [0, 0, 0] } = {}) {
   pushUndo();
   const o = { id: newId(), type: "beam", length: snapLength(length), axis, pos: pos.map(snap) };
+  doc.objects.push(o);
+  emit();
+  return o.id;
+}
+
+export function addFixture({ kind, axis = "x", pos = [0, 0, 0] } = {}) {
+  if (!kind) throw new Error("addFixture requires a kind");
+  pushUndo();
+  const o = { id: newId(), type: "fixture", kind, axis, pos: pos.map(snap) };
   doc.objects.push(o);
   emit();
   return o.id;
@@ -163,6 +145,13 @@ export function clearAll() {
 export function loadDoc(next) {
   undoStack = []; redoStack = [];
   doc = next && next.objects ? next : freshDoc();
+  // Sanitize: fix any NaN dimensions that may have been persisted.
+  for (const o of doc.objects) {
+    if (o.type === "panel") {
+      const [cw, ch] = clampPanel(o.w, o.h);
+      o.w = cw; o.h = ch;
+    }
+  }
   // Re-seed id counter so new ids don't collide.
   let max = 0;
   for (const o of doc.objects) {
@@ -209,7 +198,7 @@ export function rotateSelectionY90(ids) {
     const newD = [oldD[2], oldD[1], oldD[0]]; // swap X and Z extents
     const newPos = [nx - newD[0] / 2, mn[1], nz - newD[2] / 2];
 
-    if (o.type === "beam") {
+    if (o.type === "beam" || o.type === "fixture") {
       o.axis = rotAxis[o.axis];
     } else {
       o.normal = rotAxis[o.normal];
@@ -227,6 +216,9 @@ export function bbox(o) {
   if (o.type === "beam") {
     const dims = { x: [o.length, BEAM_SIZE, BEAM_SIZE], y: [BEAM_SIZE, o.length, BEAM_SIZE], z: [BEAM_SIZE, BEAM_SIZE, o.length] }[o.axis];
     return [o.pos.slice(), [o.pos[0] + dims[0], o.pos[1] + dims[1], o.pos[2] + dims[2]]];
+  } else if (o.type === "fixture") {
+    const d = fixtureDims(o.kind, o.axis);
+    return [o.pos.slice(), [o.pos[0] + d[0], o.pos[1] + d[1], o.pos[2] + d[2]]];
   } else {
     // panel: 1/4" thick along `normal`, w along next axis cyclically, h along the one after
     const t = 0.25;

@@ -1,14 +1,15 @@
 import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 
-import { SNAP, BEAM_SIZE, fmtIn } from "./grid.js";
+import { SNAP, BEAM_SIZE, PANEL_THICK, fmtIn } from "./grid.js";
 import {
   getDoc, getObject, subscribe,
-  addBeam, addPanel, updateObject, removeObject, removeObjects, clearAll,
+  addBeam, addPanel, addFixture, updateObject, removeObject, removeObjects, clearAll,
   setPosLive, beginLive, endLive, undo, redo, rotateSelectionY90, bbox,
 } from "./state.js";
 import { buildBeamMesh } from "./beam.js";
 import { buildPanelMesh } from "./panel.js";
+import { FIXTURES, buildFixtureMesh, fixtureLabel } from "./fixtures.js";
 import { computeConnections } from "./connections.js";
 import { computeBom } from "./bom.js";
 import { initAutosave, downloadJson, loadFromFile } from "./io.js";
@@ -94,6 +95,8 @@ function rebuildMeshes(doc) {
   for (const o of doc.objects) {
     const g = o.type === "beam"
       ? buildBeamMesh(o, boltedHoles.get(o.id), minimalMode)
+      : o.type === "fixture"
+      ? buildFixtureMesh(o)
       : buildPanelMesh(o);
     root.add(g);
     meshById.set(o.id, g);
@@ -403,6 +406,7 @@ window.addEventListener("keydown", (e) => {
       // Offset each paste from its source so they don't land on top.
       const pos = [c.pos[0] + SNAP * 2, c.pos[1], c.pos[2] + SNAP * 2];
       if (c.type === "beam") newIds.push(addBeam({ length: c.length, axis: c.axis, pos }));
+      else if (c.type === "fixture") newIds.push(addFixture({ kind: c.kind, axis: c.axis, pos }));
       else if (c.type === "panel") newIds.push(addPanel({ w: c.w, h: c.h, normal: c.normal, pos }));
     }
     selectedIds.clear();
@@ -436,7 +440,10 @@ window.addEventListener("keydown", (e) => {
       // Single object: just cycle its own orientation axis.
       forEachSelected((o) => {
         if (o.type === "beam") updateObject(o.id, { axis: cycleAxis(o.axis) });
-        else updateObject(o.id, { normal: cycleAxis(o.normal) });
+        else if (o.type === "fixture") {
+          // Fixtures only rotate around Y (thickness is vertical), so cycle x↔z.
+          updateObject(o.id, { axis: o.axis === "x" ? "z" : "x" });
+        } else updateObject(o.id, { normal: cycleAxis(o.normal) });
       });
     }
     return;
@@ -460,11 +467,12 @@ window.addEventListener("keydown", (e) => {
       updateObject(o.id, { pos: [o.pos[0] + dx, o.pos[1], o.pos[2] + dz] }, { commit: false }));
     return;
   }
-  // [ / ] — shrink/grow beams by one 1.5" hole increment (clamped in state).
+  // [ / ] — shrink/grow beams (length) or panels (W and H) by one 1.5" step.
   if (e.key === "[" || e.key === "]") {
     const delta = e.key === "]" ? SNAP : -SNAP;
     mutateSelection((o) => {
       if (o.type === "beam") updateObject(o.id, { length: o.length + delta }, { commit: false });
+      else if (o.type === "panel") updateObject(o.id, { w: o.w + delta, h: o.h + delta }, { commit: false });
     });
     return;
   }
@@ -526,6 +534,12 @@ function refreshSidebar() {
          <option value="y"${o.axis === "y" ? " selected" : ""}>Y</option>
          <option value="z"${o.axis === "z" ? " selected" : ""}>Z</option>
        </select>`
+    : o.type === "fixture"
+    ? `<label>Long side along</label>
+       <select data-k="axis">
+         <option value="x"${o.axis === "x" ? " selected" : ""}>X</option>
+         <option value="z"${o.axis === "z" ? " selected" : ""}>Z</option>
+       </select>`
     : `<label>Normal</label>
        <select data-k="normal">
          <option value="x"${o.normal === "x" ? " selected" : ""}>X</option>
@@ -535,14 +549,23 @@ function refreshSidebar() {
 
   const dimFields = o.type === "beam"
     ? `<label>Length (in)</label><input type="number" step="1.5" min="3" max="120" data-k="length" value="${o.length}">`
+    : o.type === "fixture"
+    ? (() => {
+        const f = FIXTURES[o.kind];
+        const d = f ? f.dims : null;
+        return d
+          ? `<div style="color:#888;font-size:11px;">${fixtureLabel(o.kind)} — ${d[0]}" × ${d[2]}" × ${d[1]}" (fixed)</div>`
+          : `<div style="color:#888;font-size:11px;">${o.kind}</div>`;
+      })()
     : `<label>W × H (in)</label>
        <div class="row">
          <input type="number" step="1.5" min="1.5" data-k="w" value="${o.w}">
          <input type="number" step="1.5" min="1.5" data-k="h" value="${o.h}">
        </div>`;
 
+  const typeLabel = o.type === "fixture" ? fixtureLabel(o.kind) : o.type;
   elSelProps.innerHTML = `
-    <div><strong>${o.type}</strong> <span style="color:#666;font-size:11px;">${o.id}</span></div>
+    <div><strong>${typeLabel}</strong> <span style="color:#666;font-size:11px;">${o.id}</span></div>
     ${dimFields}
     ${axisField}
     <label>Position X / Y / Z (in)</label>
@@ -601,6 +624,17 @@ document.getElementById("btn-add-beam").onclick = () => {
   localStorage.setItem(LAST_BEAM_KEY, lastBeamLength);
   selectOnly(addBeam({ length: n, pos: [0, 0, 0] }));
 };
+// Auto-generate one "+ <Fixture>" button per registered fixture so adding a
+// new entry to FIXTURES automatically exposes it in the toolbar.
+const fixturesSlot = document.getElementById("btn-add-mattress");
+for (const kind of Object.keys(FIXTURES)) {
+  const btn = document.createElement("button");
+  btn.textContent = "+ " + fixtureLabel(kind);
+  btn.onclick = () => selectOnly(addFixture({ kind, axis: "x", pos: [0, 0, 0] }));
+  fixturesSlot.parentNode.insertBefore(btn, fixturesSlot);
+}
+fixturesSlot.remove(); // drop the placeholder from index.html
+
 document.getElementById("btn-add-panel").onclick = () => {
   const raw = prompt("Panel W × H in inches (e.g. 12x18):", lastPanelDims);
   if (raw == null) return;
