@@ -89,3 +89,87 @@ export function computeBom(doc, { minimalMode = false } = {}) {
 
   return { cutRows, panelRows, hardware, nConn, fmtIn, drillingRows };
 }
+
+// ---------------------------------------------------------------------------
+// 2D guillotine bin-packing for panel sheets (4'×8' hardboard).
+// ---------------------------------------------------------------------------
+const SHEET_W = 48;   // inches (4')
+const SHEET_H = 96;   // inches (8')
+export const SHEET_PRICE = 22.52;
+
+// Expand panelRows into individual rectangles.
+export function expandPanels(panelRows) {
+  const out = [];
+  for (const r of panelRows) {
+    for (let i = 0; i < r.qty; i++) out.push({ w: r.w, h: r.h });
+  }
+  return out;
+}
+
+// Try to place a panel (possibly rotated) into one of the available
+// free rectangles on a sheet. Uses a guillotine split after placement.
+function tryPlace(sheet, pw, ph) {
+  let bestIdx = -1, bestArea = Infinity;
+  let bestPw = pw, bestPh = ph;
+  for (let ri = 0; ri < sheet.rects.length; ri++) {
+    const r = sheet.rects[ri];
+    for (const [tw, th] of [[pw, ph], [ph, pw]]) {
+      if (tw <= r.w + 1e-6 && th <= r.h + 1e-6) {
+        const area = r.w * r.h;
+        if (area < bestArea) {
+          bestArea = area; bestIdx = ri; bestPw = tw; bestPh = th;
+        }
+      }
+    }
+  }
+  if (bestIdx === -1) return false;
+  const r = sheet.rects[bestIdx];
+  sheet.cuts.push({ w: bestPw, h: bestPh, x: r.x, y: r.y });
+  sheet.rects.splice(bestIdx, 1);
+  // Right remainder
+  if (r.w - bestPw > 1e-6) {
+    sheet.rects.push({ x: r.x + bestPw, y: r.y, w: r.w - bestPw, h: bestPh });
+  }
+  // Bottom remainder (full width of original rect, not just panel width)
+  if (r.h - bestPh > 1e-6) {
+    sheet.rects.push({ x: r.x, y: r.y + bestPh, w: r.w, h: r.h - bestPh });
+  }
+  return true;
+}
+
+// Pack a list of {w, h} panels into 4'×8' sheets.
+// Returns { sheets: [{ cuts: [{w,h,x,y}] }], totalSheets, totalWaste, oversize: [{w,h}] }
+export function packPanelSheets(panels) {
+  // Sort by max dimension descending for better packing.
+  const sorted = [...panels].sort(
+    (a, b) => Math.max(b.w, b.h) - Math.max(a.w, a.h)
+  );
+  const sheets = [];
+  const oversize = [];
+
+  for (const p of sorted) {
+    // Check if it even fits a single sheet (either orientation).
+    const fitsSheet =
+      (p.w <= SHEET_W + 1e-6 && p.h <= SHEET_H + 1e-6) ||
+      (p.h <= SHEET_W + 1e-6 && p.w <= SHEET_H + 1e-6);
+    if (!fitsSheet) { oversize.push(p); continue; }
+
+    let placed = false;
+    for (const sh of sheets) {
+      if (tryPlace(sh, p.w, p.h)) { placed = true; break; }
+    }
+    if (!placed) {
+      const sh = { rects: [{ x: 0, y: 0, w: SHEET_W, h: SHEET_H }], cuts: [] };
+      tryPlace(sh, p.w, p.h);
+      sheets.push(sh);
+    }
+  }
+
+  const sheetArea = SHEET_W * SHEET_H;
+  let usedArea = 0;
+  for (const sh of sheets) {
+    for (const c of sh.cuts) usedArea += c.w * c.h;
+  }
+  const totalWaste = sheets.length * sheetArea - usedArea;
+  return { sheets, totalSheets: sheets.length, totalWaste, usedArea, oversize };
+}

@@ -1,4 +1,4 @@
-import { computeBom, expandCuts } from "./bom.js";
+import { computeBom, expandCuts, expandPanels, packPanelSheets, SHEET_PRICE } from "./bom.js";
 import { fmtIn } from "./grid.js";
 
 export function openExportView(doc, screenshotDataUrl, { minimalMode = false } = {}) {
@@ -15,6 +15,36 @@ export function openExportView(doc, screenshotDataUrl, { minimalMode = false } =
   // Flat list of required cuts — consumed by the popup's inline script that
   // re-packs the stock when the user changes the stock-length input.
   const cutsJson = JSON.stringify(expandCuts(cutRows));
+
+  // Panel sheet packing.
+  const allPanels = expandPanels(panelRows);
+  const panelPack = packPanelSheets(allPanels);
+  let panelStockHtml = "";
+  if (allPanels.length) {
+    const totalCost = (panelPack.totalSheets * SHEET_PRICE).toFixed(2);
+    const pct = panelPack.totalSheets
+      ? Math.round((panelPack.usedArea / (panelPack.totalSheets * 48 * 96)) * 100) : 0;
+    let summary = `<strong>${panelPack.totalSheets}</strong> × 4'×8' sheet`
+      + (panelPack.totalSheets === 1 ? "" : "s")
+      + ` @ $${SHEET_PRICE.toFixed(2)} = <strong>$${totalCost}</strong><br>`
+      + `${pct}% utilization`;
+    if (panelPack.oversize.length) {
+      summary += `<div class="warn">⚠ ${panelPack.oversize.length} panel(s) exceed 4'×8' sheet size</div>`;
+    }
+    const sheetRows = panelPack.sheets.map((sh, i) =>
+      `<tr class="board-row"><td>#${i + 1}</td><td>${
+        sh.cuts.map((c) => `${fmtIn(c.w)} × ${fmtIn(c.h)}`).join(" + ")
+      }</td></tr>`
+    ).join("");
+    panelStockHtml = `
+      <h2>Panel Sheet Plan</h2>
+      <div class="summary">${summary}</div>
+      <table style="margin-top:10px;">
+        <thead><tr><th style="width:70px;">Sheet</th><th>Cuts</th></tr></thead>
+        <tbody>${sheetRows}</tbody>
+      </table>
+    `;
+  }
 
   const html = `<!doctype html>
 <html><head><meta charset="utf-8"><title>Grid Beam Plan</title>
@@ -102,8 +132,10 @@ export function openExportView(doc, screenshotDataUrl, { minimalMode = false } =
   </table>
   ` : ""}
 
-  <h2>Panels (1/4" hardboard, max 4×8')</h2>
+  <h2>Panel Cut List (1/4" hardboard)</h2>
   <table><thead><tr><th>Size</th><th class="qty">Qty</th></tr></thead><tbody>${panelHtml}</tbody></table>
+
+  ${panelStockHtml}
 
   <h2>Hardware</h2>
   <p style="color:#666;font-size:12px;">${nConn} bolted connection${nConn === 1 ? "" : "s"} inferred from proximity.</p>
