@@ -30,10 +30,10 @@ export function expandCuts(cutRows) {
   return out;
 }
 
-export function computeBom(doc, { minimalMode = false } = {}) {
+export function computeBom(doc, { minimalMode = false, connections = null } = {}) {
   const beams = doc.objects.filter((o) => o.type === "beam");
   const panels = doc.objects.filter((o) => o.type === "panel");
-  const { bolts, boltedHoles } = computeConnections(doc);
+  const { bolts, boltedHoles } = connections || computeConnections(doc);
 
   const cutList = {};
   for (const b of beams) cutList[b.length] = (cutList[b.length] || 0) + 1;

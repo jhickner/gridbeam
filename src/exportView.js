@@ -146,7 +146,7 @@ export function openExportView(doc, screenshotDataUrl, { minimalMode = false } =
   </p>
   <div id="stock-summary" class="summary"></div>
   <table id="stock-table" style="margin-top:10px;">
-    <thead><tr><th style="width:70px;">Board</th><th>Cuts</th><th class="qty">Leftover</th></tr></thead>
+    <thead><tr><th style="width:80px;">Board</th><th>Cuts (per 2×2 rail)</th><th class="qty">Leftover</th></tr></thead>
     <tbody></tbody>
   </table>
 
@@ -238,12 +238,18 @@ export function openExportView(doc, screenshotDataUrl, { minimalMode = false } =
     const linFeet = (n) => (n / 12).toFixed(2) + "'";
     const stockFt = stockFeet + "'";
 
-    const pct = plan.totalBoards ? Math.round((plan.totalCut / (plan.totalBoards * stockLen)) * 100) : 0;
-    const totalCost = (plan.totalBoards * unitPrice).toFixed(2);
-    let s = '<strong>' + plan.totalBoards + '</strong> × ' + stockFt + ' 2×4'
-          + ' @ $' + unitPrice.toFixed(2) + ' = <strong>$' + totalCost + '</strong><br>'
+    // Each 2×4 is ripped lengthwise into two 2×2 rails, so each stock
+    // board yields 2 rails worth of usable length.
+    const totalRails = plan.totalBoards; // bins from FFD = individual 2×2 rails
+    const totalBoards = Math.ceil(totalRails / 2); // actual 2×4s to buy
+    const totalStock = totalRails * stockLen; // total linear inches of rail
+    const pct = totalStock ? Math.round((plan.totalCut / totalStock) * 100) : 0;
+    const totalCost = (totalBoards * unitPrice).toFixed(2);
+    let s = '<strong>' + totalBoards + '</strong> × ' + stockFt + ' 2×4'
+          + ' @ $' + unitPrice.toFixed(2) + ' = <strong>$' + totalCost + '</strong>'
+          + ' &nbsp;(' + totalRails + ' rail' + (totalRails === 1 ? '' : 's') + ' of 2×2)<br>'
           + 'used ' + linFeet(plan.totalCut) + ' · '
-          + 'waste ' + linFeet(plan.totalWaste) + ' · '
+          + 'waste ' + linFeet(totalStock - plan.totalCut) + ' · '
           + pct + '% utilization';
     if (plan.overLength.length) {
       s += '<div class="warn">⚠ ' + plan.overLength.length + ' cut(s) exceed stock length: '
@@ -252,11 +258,38 @@ export function openExportView(doc, screenshotDataUrl, { minimalMode = false } =
     summary.innerHTML = s;
 
     if (!plan.boards.length) { out.innerHTML = '<tr><td colspan="3"><em>no cuts</em></td></tr>'; return; }
-    out.innerHTML = plan.boards.map((b, i) =>
-      '<tr class="board-row"><td>#' + (i + 1) + '</td>'
-      + '<td>' + b.cuts.map(fmtIn).join(' + ') + '</td>'
-      + '<td class="qty">' + fmtIn(b.leftover) + '</td></tr>'
-    ).join('');
+
+    // Format each board's cuts, grouping identical lengths.
+    function fmtBoardCuts(cuts) {
+      const groups = {};
+      for (const c of cuts) {
+        const k = c.toFixed(3);
+        groups[k] = groups[k] || { len: c, qty: 0 };
+        groups[k].qty++;
+      }
+      return Object.values(groups)
+        .sort((a, b) => b.len - a.len)
+        .map(g => g.qty > 1 ? g.qty + ' × ' + fmtIn(g.len) : fmtIn(g.len))
+        .join(', ');
+    }
+
+    // Group rails into 2×4 pairs for display.
+    var rows = '';
+    for (var bi = 0; bi < plan.boards.length; bi += 2) {
+      var boardNum = Math.floor(bi / 2) + 1;
+      var b1 = plan.boards[bi];
+      var b2 = plan.boards[bi + 1];
+      rows += '<tr class="board-row" style="border-top:1px solid #444;">'
+        + '<td rowspan="' + (b2 ? 2 : 1) + '">2×4 #' + boardNum + '</td>'
+        + '<td>' + fmtBoardCuts(b1.cuts) + '</td>'
+        + '<td class="qty">' + fmtIn(b1.leftover) + '</td></tr>';
+      if (b2) {
+        rows += '<tr class="board-row">'
+          + '<td>' + fmtBoardCuts(b2.cuts) + '</td>'
+          + '<td class="qty">' + fmtIn(b2.leftover) + '</td></tr>';
+      }
+    }
+    out.innerHTML = rows;
   }
 
   document.getElementById('stock-in').addEventListener('change', render);

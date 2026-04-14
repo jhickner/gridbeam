@@ -36,7 +36,7 @@ let redoStack = [];
 const listeners = new Set();
 
 export function subscribe(fn) { listeners.add(fn); return () => listeners.delete(fn); }
-function emit() { listeners.forEach((fn) => fn(doc)); }
+function emit(hint) { listeners.forEach((fn) => fn(doc, hint)); }
 
 export function getDoc() { return doc; }
 export function getObject(id) { return doc.objects.find((o) => o.id === id); }
@@ -96,32 +96,39 @@ export function updateObject(id, patch, { commit = true } = {}) {
   const o = getObject(id);
   if (!o) return;
   if (commit) pushUndo();
+  // Detect position-only changes so we can emit a fast-path hint.
+  const posOnly = Object.keys(patch).length === 1 && Array.isArray(patch.pos);
   Object.assign(o, patch);
   if (o.type === "beam") o.length = snapLength(o.length);
   if (o.type === "panel") { const [cw, ch] = clampPanel(o.w, o.h); o.w = cw; o.h = ch; }
   if (Array.isArray(o.pos)) o.pos = snapPosFor(o, o.pos);
-  emit();
+  // During a live batch (beginLive/endLive), skip per-object emits —
+  // the batch will emit once at endLive().
+  if (!liveMode) emit(posOnly ? "pos" : undefined);
 }
 
 // Live position updates during drag (no undo entry per frame).
+// Emits "pos" hint so the renderer can skip expensive rebuilds.
 export function setPosLive(id, pos) {
   const o = getObject(id);
   if (!o) return;
   o.pos = snapPosFor(o, pos);
-  emit();
+  emit("pos");
 }
 // Drag protocol: snapshot the doc on pointerdown, push that snapshot
 // onto the undo stack on pointerup — so one drag = one undo step.
 let dragSnapshot = null;
-export function beginLive() { dragSnapshot = clone(doc); }
+let liveMode = false; // true between beginLive/endLive — suppresses per-object emits
+export function beginLive() { dragSnapshot = clone(doc); liveMode = true; }
 export function endLive() {
+  liveMode = false;
   if (dragSnapshot) {
     undoStack.push(dragSnapshot);
     if (undoStack.length > 100) undoStack.shift();
     redoStack.length = 0;
     dragSnapshot = null;
   }
-  emit();
+  emit(); // full rebuild after batch completes
 }
 
 export function removeObject(id) {

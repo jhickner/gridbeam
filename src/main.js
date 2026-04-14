@@ -87,10 +87,23 @@ function refreshOutlines() {
   }
 }
 
-function rebuildMeshes(doc) {
-  const { bolts, boltedHoles } = computeConnections(doc);
+// Cached connections result — computed once per full rebuild and shared with
+// refreshSummary so computeConnections doesn't run twice.
+let cachedConnections = null;
 
-  for (const [, g] of meshById) root.remove(g);
+function disposeGroup(g) {
+  g.traverse((child) => {
+    if (child.geometry) child.geometry.dispose();
+    // Materials are shared module-level singletons — don't dispose them.
+  });
+}
+
+function rebuildMeshes(doc) {
+  cachedConnections = computeConnections(doc);
+  const { bolts, boltedHoles } = cachedConnections;
+
+  // Dispose old geometries before removing.
+  for (const [, g] of meshById) { disposeGroup(g); root.remove(g); }
   meshById.clear();
   for (const o of doc.objects) {
     const g = o.type === "beam"
@@ -102,6 +115,8 @@ function rebuildMeshes(doc) {
     meshById.set(o.id, g);
   }
 
+  // Dispose old bolt geometries.
+  boltsGroup.traverse((child) => { if (child.geometry) child.geometry.dispose(); });
   boltsGroup.clear();
   for (const c of bolts) {
     const s = new THREE.Mesh(boltGeom, beamBoltMat);
@@ -117,9 +132,21 @@ function rebuildMeshes(doc) {
   refreshSummary();
 }
 
-subscribe((doc) => {
-  try { rebuildMeshes(doc); }
-  catch (e) { console.error("rebuildMeshes failed:", e); }
+// Fast path: only positions changed — update mesh transforms in-place
+// without tearing down and rebuilding the scene.
+function updateMeshPositions(doc) {
+  for (const o of doc.objects) {
+    const g = meshById.get(o.id);
+    if (g) g.position.set(o.pos[0], o.pos[1], o.pos[2]);
+  }
+  // Outlines are kept in sync by the tick loop (helper.box.setFromObject).
+}
+
+subscribe((doc, hint) => {
+  try {
+    if (hint === "pos") updateMeshPositions(doc);
+    else rebuildMeshes(doc);
+  } catch (e) { console.error("rebuildMeshes failed:", e); }
 });
 
 // ------- Picking & dragging -------
@@ -668,7 +695,7 @@ function refreshSidebar() {
 
 function refreshSummary() {
   const doc = getDoc();
-  const { cutRows, panelRows, nConn } = computeBom(doc);
+  const { cutRows, panelRows, nConn } = computeBom(doc, { connections: cachedConnections });
   const cut = cutRows.length
     ? cutRows.map((r) => `<tr><td>${fmtIn(r.length)}</td><td>${r.qty}</td></tr>`).join("")
     : `<tr><td colspan="2"><em>none</em></td></tr>`;
