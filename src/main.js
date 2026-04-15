@@ -26,10 +26,10 @@ const scene = new THREE.Scene();
 scene.background = new THREE.Color(0x1e1e1e);
 
 const camera = new THREE.PerspectiveCamera(45, 1, 0.5, 2000);
-camera.position.set(60, 60, 80);
+camera.position.set(40, 50, 60);
 
 const controls = new OrbitControls(camera, renderer.domElement);
-controls.target.set(12, 6, 12);
+controls.target.set(0, 6, 0);
 controls.update();
 
 scene.add(new THREE.HemisphereLight(0xffffff, 0x222222, 0.7));
@@ -38,10 +38,90 @@ dir.position.set(40, 80, 30);
 scene.add(dir);
 
 const gridHelper = new THREE.GridHelper(240, 160, 0x444444, 0x2a2a2a);
-gridHelper.position.set(120, 0, 120);
+// Centered at origin so the dome and work area align.
 scene.add(gridHelper);
 
 scene.add(new THREE.AxesHelper(6));
+
+// ------- Environments -------
+// Registry of surroundings. Each entry's build() returns a THREE.Object3D.
+const ENVIRONMENTS = {
+  "dome-30": {
+    label: "30' Dome + 1' Stem Wall",
+    build() {
+      const group = new THREE.Group();
+      const radius = 180; // 30' diameter = 360" → 180" radius
+      const wallHeight = 12; // 1' stem wall
+
+      const wireMat = new THREE.MeshBasicMaterial({
+        color: 0x88aacc,
+        wireframe: true,
+        transparent: true,
+        opacity: 0.25,
+        side: THREE.DoubleSide,
+      });
+
+      // Hemisphere dome sitting on top of the stem wall.
+      const domeGeom = new THREE.SphereGeometry(
+        radius, 48, 24,
+        0, Math.PI * 2,
+        0, Math.PI / 2
+      );
+      const dome = new THREE.Mesh(domeGeom, wireMat);
+      dome.position.y = wallHeight;
+      group.add(dome);
+
+      // Cylindrical stem wall from ground to wallHeight.
+      const wallGeom = new THREE.CylinderGeometry(
+        radius, radius,  // top and bottom radius match dome base
+        wallHeight,       // height
+        48, 1,            // radial segments, height segments
+        true              // open-ended (no caps)
+      );
+      const wall = new THREE.Mesh(wallGeom, wireMat);
+      wall.position.y = wallHeight / 2; // cylinder is centered on its height
+      group.add(wall);
+
+      // Loft floor at 7'6" (90") — a circular disc showing the loft level.
+      const loftHeight = 90;
+      // The dome radius at loft height: r² = R² - (h - wallHeight)²
+      // where h is the loft height measured from dome center (top of stem wall).
+      const hAboveWall = loftHeight - wallHeight;
+      const loftRadius = Math.sqrt(radius * radius - hAboveWall * hAboveWall);
+      const loftGeom = new THREE.CircleGeometry(loftRadius, 48);
+      const loftMat = new THREE.MeshBasicMaterial({
+        color: 0x88aacc,
+        wireframe: true,
+        transparent: true,
+        opacity: 0.15,
+        side: THREE.DoubleSide,
+      });
+      const loft = new THREE.Mesh(loftGeom, loftMat);
+      loft.rotation.x = -Math.PI / 2; // lay flat
+      loft.position.y = loftHeight;
+      group.add(loft);
+
+      return group;
+    },
+  },
+};
+
+let envMesh = null;
+let envKey = localStorage.getItem("gridbeam.env") || "none";
+
+function setEnvironment(key) {
+  if (envMesh) { scene.remove(envMesh); envMesh = null; }
+  envKey = key;
+  localStorage.setItem("gridbeam.env", key);
+  const entry = ENVIRONMENTS[key];
+  if (entry) {
+    envMesh = entry.build();
+    scene.add(envMesh);
+  }
+}
+
+// Initialize on boot (after scene exists).
+setEnvironment(envKey);
 
 function resize() {
   const w = wrap.clientWidth, h = wrap.clientHeight;
@@ -802,6 +882,11 @@ btnClipped.onclick = () => {
   syncClippedButton();
   rebuildMeshes(getDoc());
 };
+
+// ------- Environment selector -------
+const envSelect = document.getElementById("env-select");
+envSelect.value = envKey;
+envSelect.addEventListener("change", () => setEnvironment(envSelect.value));
 
 // ------- View persistence -------
 // Serializable snapshot of the OrbitControls camera state.
