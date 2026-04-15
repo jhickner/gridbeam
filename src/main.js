@@ -48,6 +48,7 @@ scene.add(new THREE.AxesHelper(6));
 const ENVIRONMENTS = {
   "dome-30": {
     label: "30' Dome + 1' Stem Wall",
+    loftHeight: 90, // 7'6"
     build() {
       const group = new THREE.Group();
       const radius = 180; // 30' diameter = 360" → 180" radius
@@ -82,23 +83,21 @@ const ENVIRONMENTS = {
       wall.position.y = wallHeight / 2; // cylinder is centered on its height
       group.add(wall);
 
-      // Loft floor at 7'6" (90") — a circular disc showing the loft level.
+      // Loft floor at 7'6" (90") — a 1.5" thick translucent disc.
       const loftHeight = 90;
-      // The dome radius at loft height: r² = R² - (h - wallHeight)²
-      // where h is the loft height measured from dome center (top of stem wall).
+      const loftThick = 1.5;
       const hAboveWall = loftHeight - wallHeight;
       const loftRadius = Math.sqrt(radius * radius - hAboveWall * hAboveWall);
-      const loftGeom = new THREE.CircleGeometry(loftRadius, 48);
+      const loftGeom = new THREE.CylinderGeometry(loftRadius, loftRadius, loftThick, 48, 1);
       const loftMat = new THREE.MeshBasicMaterial({
         color: 0x88aacc,
-        wireframe: true,
         transparent: true,
-        opacity: 0.15,
+        opacity: 0.08,
         side: THREE.DoubleSide,
+        depthWrite: false,
       });
       const loft = new THREE.Mesh(loftGeom, loftMat);
-      loft.rotation.x = -Math.PI / 2; // lay flat
-      loft.position.y = loftHeight;
+      loft.position.y = loftHeight + loftThick / 2; // bottom face at loftHeight
       group.add(loft);
 
       return group;
@@ -141,6 +140,13 @@ scene.add(boltsGroup);
 
 const boltGeom = new THREE.SphereGeometry(0.35, 12, 10);
 const beamBoltMat = new THREE.MeshBasicMaterial({ color: 0xffd24a });
+
+// Loft-resting indicators — small colored markers under objects on the loft.
+const loftIndicators = new THREE.Group();
+scene.add(loftIndicators);
+const loftMarkerMat = new THREE.MeshBasicMaterial({
+  color: 0xff8833, transparent: true, opacity: 0.6, side: THREE.DoubleSide,
+});
 
 // ------- Multi-selection -------
 const selectedIds = new Set();
@@ -204,6 +210,9 @@ function rebuildMeshes(doc) {
     boltsGroup.add(s);
   }
 
+  // Loft-resting indicators.
+  rebuildLoftIndicators(doc);
+
   // Prune selection of any ids that no longer exist.
   for (const id of [...selectedIds]) if (!meshById.has(id)) selectedIds.delete(id);
 
@@ -219,7 +228,31 @@ function updateMeshPositions(doc) {
     const g = meshById.get(o.id);
     if (g) g.position.set(o.pos[0], o.pos[1], o.pos[2]);
   }
+  rebuildLoftIndicators(doc);
   // Outlines are kept in sync by the tick loop (helper.box.setFromObject).
+}
+
+// Show a flat marker under each object resting on the active environment's loft plane.
+function rebuildLoftIndicators(doc) {
+  loftIndicators.traverse((c) => { if (c.geometry && c.geometry !== boltGeom) c.geometry.dispose(); });
+  loftIndicators.clear();
+  const env = ENVIRONMENTS[envKey];
+  if (!env || !env.loftHeight) return;
+  const lh = env.loftHeight;
+  const EPS = 0.01;
+  for (const o of doc.objects) {
+    if (Math.abs(o.pos[1] - lh) > EPS) continue;
+    // Object's bottom face is on the loft. Place a thin rectangle matching
+    // its footprint, slightly below the object.
+    const [mn, mx] = bbox(o);
+    const dx = mx[0] - mn[0], dz = mx[2] - mn[2];
+    if (dx < 0.1 || dz < 0.1) continue;
+    const geom = new THREE.PlaneGeometry(dx, dz);
+    const marker = new THREE.Mesh(geom, loftMarkerMat);
+    marker.rotation.x = -Math.PI / 2;
+    marker.position.set(mn[0] + dx / 2, lh - 0.05, mn[2] + dz / 2);
+    loftIndicators.add(marker);
+  }
 }
 
 subscribe((doc, hint) => {
