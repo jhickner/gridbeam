@@ -162,13 +162,33 @@ export function groupObjects(ids) {
   emit();
 }
 
-// Remove the group tag from all `ids`. One undo step.
+// Remove the group tag from all `ids`. If the group was rotated, bake the
+// rotation into world positions and snap back to the grid.
 export function ungroupObjects(ids) {
   if (!ids || !ids.length) return;
   pushUndo();
   for (const id of ids) {
     const o = getObject(id);
-    if (o) delete o.group;
+    if (!o) continue;
+    if (o.groupRotY && o.groupPivot) {
+      // Bake rotation into world position.
+      const wp = worldPosOf(o);
+      o.pos = snapPosFor(o, wp);
+      // Snap axis/normal to nearest 90° based on the rotation.
+      const snappedRot = Math.round(o.groupRotY / 90) * 90;
+      const turns = (((snappedRot % 360) + 360) % 360) / 90; // 0,1,2,3
+      const rotAxis = { x: "z", z: "x", y: "y" };
+      for (let t = 0; t < turns; t++) {
+        if (o.type === "beam" || o.type === "fixture") o.axis = rotAxis[o.axis];
+        else if (o.type === "panel") {
+          o.normal = rotAxis[o.normal];
+          const tmp = o.w; o.w = o.h; o.h = tmp;
+        }
+      }
+    }
+    delete o.group;
+    delete o.groupRotY;
+    delete o.groupPivot;
   }
   emit();
 }
@@ -178,6 +198,68 @@ export function groupMembers(id) {
   const o = getObject(id);
   if (!o || !o.group) return [id];
   return doc.objects.filter((x) => x.group === o.group).map((x) => x.id);
+}
+
+// Set the Y-axis rotation (degrees) and pivot for a group. Called during
+// live drag rotation and by the T hotkey.
+export function setGroupRotation(ids, angleDeg, pivot) {
+  for (const id of ids) {
+    const o = getObject(id);
+    if (!o) continue;
+    o.groupRotY = angleDeg;
+    o.groupPivot = pivot;
+  }
+  emit("pos"); // fast path — only transforms changed, not geometry
+}
+
+export function setGroupRotationLive(ids, angleDeg, pivot) {
+  for (const id of ids) {
+    const o = getObject(id);
+    if (!o) continue;
+    o.groupRotY = angleDeg;
+    o.groupPivot = pivot;
+  }
+  emit("pos");
+}
+
+// Get the current rotation angle for a group (from any member). Returns 0 if none.
+export function getGroupRotation(id) {
+  const o = getObject(id);
+  return (o && o.groupRotY) || 0;
+}
+
+export function getGroupPivot(id) {
+  const o = getObject(id);
+  return (o && o.groupPivot) || null;
+}
+
+// Compute the world position of an object, accounting for group rotation.
+// Returns a new [x, y, z] array.
+export function worldPosOf(o) {
+  if (!o.groupRotY || !o.groupPivot) return o.pos.slice();
+  const [px, pz] = o.groupPivot;
+  const rad = -o.groupRotY * Math.PI / 180;
+  const cos = Math.cos(rad), sin = Math.sin(rad);
+  const dx = o.pos[0] - px, dz = o.pos[2] - pz;
+  return [
+    px + dx * cos - dz * sin,
+    o.pos[1],
+    pz + dx * sin + dz * cos,
+  ];
+}
+
+// Compute the group centroid in local (unrotated) space for a set of ids.
+export function computeGroupPivot(ids) {
+  let cx = 0, cz = 0, n = 0;
+  for (const id of ids) {
+    const o = getObject(id);
+    if (!o) continue;
+    const [mn, mx] = bbox(o);
+    cx += (mn[0] + mx[0]) / 2;
+    cz += (mn[2] + mx[2]) / 2;
+    n++;
+  }
+  return n ? [cx / n, cz / n] : [0, 0];
 }
 
 export function clearAll() {
@@ -258,8 +340,8 @@ export function rotateSelectionY90(ids) {
   emit();
 }
 
-// Compute an object's world-space AABB [min, max], each a 3-array.
-export function bbox(o) {
+// Compute an object's local AABB (before group rotation).
+function localBbox(o) {
   if (o.type === "beam") {
     const dims = { x: [o.length, BEAM_SIZE, BEAM_SIZE], y: [BEAM_SIZE, o.length, BEAM_SIZE], z: [BEAM_SIZE, BEAM_SIZE, o.length] }[o.axis];
     return [o.pos.slice(), [o.pos[0] + dims[0], o.pos[1] + dims[1], o.pos[2] + dims[2]]];
@@ -267,9 +349,34 @@ export function bbox(o) {
     const d = fixtureDims(o.kind, o.axis);
     return [o.pos.slice(), [o.pos[0] + d[0], o.pos[1] + d[1], o.pos[2] + d[2]]];
   } else {
-    // panel: 1/4" thick along `normal`, w along next axis cyclically, h along the one after
     const t = 0.25;
     const d = o.normal === "x" ? [t, o.w, o.h] : o.normal === "y" ? [o.w, t, o.h] : [o.w, o.h, t];
     return [o.pos.slice(), [o.pos[0] + d[0], o.pos[1] + d[1], o.pos[2] + d[2]]];
   }
+}
+
+// Compute an object's world-space AABB [min, max], each a 3-array.
+// Accounts for group rotation by rotating the 8 local corners and taking min/max.
+export function bbox(o) {
+  const [lmn, lmx] = localBbox(o);
+  if (!o.groupRotY || !o.groupPivot) return [lmn, lmx];
+
+  const [px, pz] = o.groupPivot;
+  const rad = -o.groupRotY * Math.PI / 180;
+  const cos = Math.cos(rad), sin = Math.sin(rad);
+  const mn = [Infinity, lmn[1], Infinity];
+  const mx = [-Infinity, lmx[1], -Infinity];
+  // Rotate each of the 4 XZ corners (Y stays unchanged).
+  for (const x of [lmn[0], lmx[0]]) {
+    for (const z of [lmn[2], lmx[2]]) {
+      const dx = x - px, dz = z - pz;
+      const wx = px + dx * cos - dz * sin;
+      const wz = pz + dx * sin + dz * cos;
+      mn[0] = Math.min(mn[0], wx);
+      mn[2] = Math.min(mn[2], wz);
+      mx[0] = Math.max(mx[0], wx);
+      mx[2] = Math.max(mx[2], wz);
+    }
+  }
+  return [mn, mx];
 }

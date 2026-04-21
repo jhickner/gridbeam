@@ -7,6 +7,8 @@ import {
   addBeam, addPanel, addFixture, updateObject, removeObject, removeObjects, clearAll,
   setPosLive, beginLive, endLive, undo, redo, rotateSelectionY90, bbox,
   groupObjects, ungroupObjects, groupMembers,
+  setGroupRotation, setGroupRotationLive, getGroupRotation, getGroupPivot,
+  computeGroupPivot, worldPosOf,
 } from "./state.js";
 import { buildBeamMesh } from "./beam.js";
 import { buildPanelMesh } from "./panel.js";
@@ -184,6 +186,9 @@ function disposeGroup(g) {
   });
 }
 
+// Track wrapper groups for rotated groups so we can clean them up.
+const rotGroupWrappers = new Map(); // groupId → THREE.Group
+
 function rebuildMeshes(doc) {
   cachedConnections = computeConnections(doc);
   const { bolts, boltedHoles } = cachedConnections;
@@ -191,7 +196,45 @@ function rebuildMeshes(doc) {
   // Dispose old geometries before removing.
   for (const [, g] of meshById) { disposeGroup(g); root.remove(g); }
   meshById.clear();
+  for (const [, w] of rotGroupWrappers) { root.remove(w); }
+  rotGroupWrappers.clear();
+
+  // Collect rotated groups so we can batch their members into wrapper groups.
+  const rotGroups = new Map(); // groupId → { rotY, pivot, members: [o...] }
   for (const o of doc.objects) {
+    if (o.group && o.groupRotY && o.groupPivot) {
+      if (!rotGroups.has(o.group)) {
+        rotGroups.set(o.group, { rotY: o.groupRotY, pivot: o.groupPivot, members: [] });
+      }
+      rotGroups.get(o.group).members.push(o);
+    }
+  }
+
+  // Build wrapper THREE.Groups for each rotated group.
+  const rotatedIds = new Set();
+  for (const [gid, rg] of rotGroups) {
+    const wrapper = new THREE.Group();
+    wrapper.position.set(rg.pivot[0], 0, rg.pivot[1]);
+    wrapper.rotation.y = -rg.rotY * Math.PI / 180;
+    for (const o of rg.members) {
+      const g = o.type === "beam"
+        ? buildBeamMesh(o, boltedHoles.get(o.id), minimalMode)
+        : o.type === "fixture"
+        ? buildFixtureMesh(o)
+        : buildPanelMesh(o, clippedCorners);
+      // Position relative to pivot (local group space).
+      g.position.set(o.pos[0] - rg.pivot[0], o.pos[1], o.pos[2] - rg.pivot[1]);
+      wrapper.add(g);
+      meshById.set(o.id, g);
+      rotatedIds.add(o.id);
+    }
+    root.add(wrapper);
+    rotGroupWrappers.set(gid, wrapper);
+  }
+
+  // Build non-rotated objects directly.
+  for (const o of doc.objects) {
+    if (rotatedIds.has(o.id)) continue;
     const g = o.type === "beam"
       ? buildBeamMesh(o, boltedHoles.get(o.id), minimalMode)
       : o.type === "fixture"
@@ -221,15 +264,29 @@ function rebuildMeshes(doc) {
   refreshSummary();
 }
 
-// Fast path: only positions changed — update mesh transforms in-place
-// without tearing down and rebuilding the scene.
+// Fast path: only positions/rotations changed — update transforms in-place.
 function updateMeshPositions(doc) {
+  // Update wrapper group rotations for rotated groups.
+  for (const [gid, wrapper] of rotGroupWrappers) {
+    // Find any member to read current rotation.
+    const member = doc.objects.find((o) => o.group === gid);
+    if (member && member.groupRotY !== undefined && member.groupPivot) {
+      wrapper.position.set(member.groupPivot[0], 0, member.groupPivot[1]);
+      wrapper.rotation.y = -member.groupRotY * Math.PI / 180;
+    }
+  }
+
   for (const o of doc.objects) {
     const g = meshById.get(o.id);
-    if (g) g.position.set(o.pos[0], o.pos[1], o.pos[2]);
+    if (!g) continue;
+    if (o.groupRotY && o.groupPivot && rotGroupWrappers.has(o.group)) {
+      // Mesh is a child of a wrapper — position relative to pivot.
+      g.position.set(o.pos[0] - o.groupPivot[0], o.pos[1], o.pos[2] - o.groupPivot[1]);
+    } else {
+      g.position.set(o.pos[0], o.pos[1], o.pos[2]);
+    }
   }
   rebuildLoftIndicators(doc);
-  // Outlines are kept in sync by the tick loop (helper.box.setFromObject).
 }
 
 // Show a flat marker under each object resting on the active environment's loft plane.
@@ -431,8 +488,29 @@ function onPointerDown(e) {
   // Plain click on an already-selected object: keep the selection (so drag moves all).
   // Plain click on an unselected object: replace selection with this id + group members.
   const members = groupMembers(id);
+  const clickedObj = getObject(id);
+
+  // Shift+click on an already-selected group → enter rotation drag mode.
+  if (e.shiftKey && selectedIds.has(id) && clickedObj && clickedObj.group && members.length >= 2) {
+    const ids = members;
+    const pivot = getGroupPivot(id) || computeGroupPivot(ids);
+    const startRot = getGroupRotation(id);
+    const dragY = clickedObj.pos[1];
+    const rect = renderer.domElement.getBoundingClientRect();
+    ndc.x = ((e.clientX - rect.left) / rect.width) * 2 - 1;
+    ndc.y = -((e.clientY - rect.top) / rect.height) * 2 + 1;
+    raycaster.setFromCamera(ndc, camera);
+    const hit = new THREE.Vector3();
+    if (!raycaster.ray.intersectPlane(planeAtY(dragY), hit)) return;
+    const startAngle = Math.atan2(hit.x - pivot[0], hit.z - pivot[1]);
+    drag = { rotating: true, ids, pivot, startRot, startAngle, dragY };
+    controls.enabled = false;
+    beginLive();
+    document.body.classList.add("dragging");
+    return;
+  }
+
   if (e.shiftKey) {
-    // Toggle: if already selected remove the whole group, else add it.
     if (selectedIds.has(id)) {
       for (const m of members) selectedIds.delete(m);
     } else {
@@ -445,10 +523,8 @@ function onPointerDown(e) {
   refreshOutlines();
   refreshSidebar();
 
-  // Nothing selected after the click? (shift-click that deselected the only item.)
   if (!selectedIds.has(id)) return;
 
-  // Build drag set from current selection.
   const o = getObject(id);
   const dragY = o.pos[1];
   const rect = renderer.domElement.getBoundingClientRect();
@@ -478,6 +554,21 @@ function onPointerMove(e) {
     return;
   }
   if (!drag) return;
+
+  // Rotation drag mode.
+  if (drag.rotating) {
+    const rect = renderer.domElement.getBoundingClientRect();
+    ndc.x = ((e.clientX - rect.left) / rect.width) * 2 - 1;
+    ndc.y = -((e.clientY - rect.top) / rect.height) * 2 + 1;
+    raycaster.setFromCamera(ndc, camera);
+    const hit = new THREE.Vector3();
+    if (!raycaster.ray.intersectPlane(planeAtY(drag.dragY), hit)) return;
+    const curAngle = Math.atan2(hit.x - drag.pivot[0], hit.z - drag.pivot[1]);
+    const deltaRad = curAngle - drag.startAngle;
+    const deltaDeg = deltaRad * 180 / Math.PI;
+    setGroupRotationLive(drag.ids, drag.startRot + deltaDeg, drag.pivot);
+    return;
+  }
   const rect = renderer.domElement.getBoundingClientRect();
   ndc.x = ((e.clientX - rect.left) / rect.width) * 2 - 1;
   ndc.y = -((e.clientY - rect.top) / rect.height) * 2 + 1;
@@ -635,6 +726,23 @@ window.addEventListener("keydown", (e) => {
     refreshSidebar();
     return;
   }
+  // T / Shift+T — rotate a group by ±5° around Y.
+  if (e.key === "t" || e.key === "T") {
+    // Only works when the entire selection is a single group.
+    const ids = [...selectedIds];
+    if (ids.length < 2) return;
+    const first = getObject(ids[0]);
+    if (!first || !first.group) return;
+    const allSameGroup = ids.every((id) => { const o = getObject(id); return o && o.group === first.group; });
+    if (!allSameGroup) return;
+    const delta = e.shiftKey ? -5 : 5;
+    const currentRot = getGroupRotation(ids[0]);
+    const pivot = getGroupPivot(ids[0]) || computeGroupPivot(ids);
+    beginLive();
+    setGroupRotation(ids, currentRot + delta, pivot);
+    endLive();
+    return;
+  }
   if (e.key === "r" || e.key === "R") {
     if (selectedIds.size > 1) {
       // Group rotate: 90° about the selection's centroid on the Y axis,
@@ -718,10 +826,19 @@ function refreshSidebar() {
     for (const id of selectedIds) { const o = getObject(id); if (o && o.group) groups.add(o.group); }
     const isGrouped = groups.size === 1 && selectedIds.size === groupMembers([...selectedIds][0]).length;
 
+    const rotAngle = isGrouped ? getGroupRotation([...selectedIds][0]) : 0;
+    const rotInfo = rotAngle
+      ? `<div style="margin-top:6px;">
+           <div style="color:#aaa;font-size:11px;">Rotation</div>
+           <div style="font-family:ui-monospace,Menlo,monospace;">${rotAngle.toFixed(1)}°</div>
+         </div>`
+      : "";
+
     elSelProps.innerHTML = `
       <div><strong>${selectedIds.size} objects selected</strong>
         ${isGrouped ? '<span style="color:#4acfff;font-size:11px;"> (grouped)</span>' : ""}
       </div>
+      ${rotInfo}
       <div style="margin-top:6px;">
         <div style="color:#aaa;font-size:11px;">Extent W × D × H</div>
         <div style="font-family:ui-monospace,Menlo,monospace;">
@@ -729,7 +846,8 @@ function refreshSidebar() {
         </div>
       </div>
       <div style="color:#888;font-size:11px;margin-top:8px;">
-        Drag to move · R group-rotate · Q/E raise/lower · arrows nudge · Del<br>
+        Drag to move · R 90° · T/⇧T ±5° · Shift+drag rotate<br>
+        Q/E raise/lower · arrows nudge · Del<br>
         ${isGrouped ? "⌘⇧G ungroup" : "⌘G group"}
       </div>
     `;
@@ -828,34 +946,37 @@ const LAST_PANEL_KEY = "gridbeam.lastPanelDims";
 let lastBeamLength = localStorage.getItem(LAST_BEAM_KEY) || "12";
 let lastPanelDims = localStorage.getItem(LAST_PANEL_KEY) || "12x18";
 
-document.getElementById("btn-add-beam").onclick = () => {
-  const raw = prompt("Beam length in inches (multiple of 1.5, 3–120):", lastBeamLength);
-  if (raw == null) return;
-  const n = parseFloat(raw);
-  if (!isFinite(n)) return;
-  lastBeamLength = raw.trim();
-  localStorage.setItem(LAST_BEAM_KEY, lastBeamLength);
-  selectOnly(addBeam({ length: n, pos: [0, 0, 0] }));
-};
-// Auto-generate one "+ <Fixture>" button per registered fixture so adding a
-// new entry to FIXTURES automatically exposes it in the toolbar.
-const fixturesSlot = document.getElementById("btn-add-mattress");
+// Populate the add-type dropdown with fixture entries from the registry.
+const addTypeSelect = document.getElementById("add-type-select");
 for (const kind of Object.keys(FIXTURES)) {
-  const btn = document.createElement("button");
-  btn.textContent = "+ " + fixtureLabel(kind);
-  btn.onclick = () => selectOnly(addFixture({ kind, axis: "x", pos: [0, 0, 0] }));
-  fixturesSlot.parentNode.insertBefore(btn, fixturesSlot);
+  const opt = document.createElement("option");
+  opt.value = `fixture:${kind}`;
+  opt.textContent = fixtureLabel(kind);
+  addTypeSelect.appendChild(opt);
 }
-fixturesSlot.remove(); // drop the placeholder from index.html
 
-document.getElementById("btn-add-panel").onclick = () => {
-  const raw = prompt("Panel W × H in inches (e.g. 12x18):", lastPanelDims);
-  if (raw == null) return;
-  const m = /^\s*([\d.]+)\s*[xX×]\s*([\d.]+)\s*$/.exec(raw);
-  if (!m) return;
-  lastPanelDims = raw.trim();
-  localStorage.setItem(LAST_PANEL_KEY, lastPanelDims);
-  selectOnly(addPanel({ w: parseFloat(m[1]), h: parseFloat(m[2]), pos: [0, 0, 0] }));
+document.getElementById("btn-add").onclick = () => {
+  const val = addTypeSelect.value;
+  if (val === "beam") {
+    const raw = prompt("Beam length in inches (multiple of 1.5, 3–120):", lastBeamLength);
+    if (raw == null) return;
+    const n = parseFloat(raw);
+    if (!isFinite(n)) return;
+    lastBeamLength = raw.trim();
+    localStorage.setItem(LAST_BEAM_KEY, lastBeamLength);
+    selectOnly(addBeam({ length: n, pos: [0, 0, 0] }));
+  } else if (val === "panel") {
+    const raw = prompt("Panel W × H in inches (e.g. 12x18):", lastPanelDims);
+    if (raw == null) return;
+    const m = /^\s*([\d.]+)\s*[xX×]\s*([\d.]+)\s*$/.exec(raw);
+    if (!m) return;
+    lastPanelDims = raw.trim();
+    localStorage.setItem(LAST_PANEL_KEY, lastPanelDims);
+    selectOnly(addPanel({ w: parseFloat(m[1]), h: parseFloat(m[2]), pos: [0, 0, 0] }));
+  } else if (val.startsWith("fixture:")) {
+    const kind = val.slice("fixture:".length);
+    selectOnly(addFixture({ kind, axis: "x", pos: [0, 0, 0] }));
+  }
 };
 // ------- Mode toggle -------
 const btnOrbit = document.getElementById("btn-mode-orbit");

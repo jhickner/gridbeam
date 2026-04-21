@@ -26,8 +26,9 @@ function panelAabb(o) {
 // actual bolt direction (the two beams' touching face).
 const AXIS_LETTER = ["x", "y", "z"];
 export function computeConnections(doc) {
-  const beams = doc.objects.filter((o) => o.type === "beam");
-  const panels = doc.objects.filter((o) => o.type === "panel");
+  // Skip rotated objects — bolts only make sense for grid-aligned beams.
+  const beams = doc.objects.filter((o) => o.type === "beam" && !o.groupRotY);
+  const panels = doc.objects.filter((o) => o.type === "panel" && !o.groupRotY);
   const bolts = [];
   const boltedHoles = new Map();
   // Track which hole indices per beam are occupied and in which direction.

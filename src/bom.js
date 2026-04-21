@@ -59,30 +59,42 @@ export function computeBom(doc, { minimalMode = false, connections = null } = {}
     { item: "Wood screw (panels)", qty: nScrews },
   ];
 
-  // Minimal-mode drilling instructions: grouped purely by beam length and
-  // hole pattern. Each hole is measured as the distance from the nearest
-  // end of the beam (since a 2×2 can be flipped end-for-end during layout)
-  // and drilling direction is irrelevant — a through-hole in a 2×2 serves
-  // any bolt axis. Beams with identical patterns after this normalization
-  // are merged into a single row with a qty count.
+  // Minimal-mode drilling instructions: grouped by beam length and hole
+  // pattern. Each hole is measured as distance from the nearest end and
+  // labeled with its face (A or B). For a beam, the two perpendicular
+  // drill directions are called face A (first perp axis) and face B
+  // (second perp axis), matching the rendering convention:
+  //   beam along X → A = Y direction, B = Z direction
+  //   beam along Y → A = X direction, B = Z direction
+  //   beam along Z → A = X direction, B = Y direction
   let drillingRows = null;
   if (minimalMode) {
+    const perpsOf = (axis) => axis === "x" ? ["y", "z"] : axis === "y" ? ["x", "z"] : ["x", "y"];
     const groups = new Map();
     for (const b of beams) {
       const entries = boltedHoles.get(b.id) || new Set();
       const offs = holeOffsets(b.length);
-      // Deduplicate hole indices (multiple bolt axes at the same position
-      // collapse into a single drilled hole).
-      const indices = new Set();
-      for (const e of entries) indices.add(+e.split("|")[0]);
+      const perps = perpsOf(b.axis);
+      // Collect holes with face labels. If a hole has bolts in both
+      // directions, it still needs only one through-hole — mark as "A+B".
+      const holeMap = new Map(); // holeIdx → Set<axisLetter>
+      for (const e of entries) {
+        const [iStr, ax] = e.split("|");
+        const i = +iStr;
+        if (!holeMap.has(i)) holeMap.set(i, new Set());
+        holeMap.get(i).add(ax);
+      }
       const holes = [];
-      for (const i of indices) {
+      for (const [i, axes] of holeMap) {
         const off = offs[i];
         if (off === undefined) continue;
-        holes.push(+Math.min(off, b.length - off).toFixed(3));
+        const dist = +Math.min(off, b.length - off).toFixed(3);
+        const faceLabels = [...axes].map((ax) => ax === perps[0] ? "A" : "B").sort();
+        const face = faceLabels.join("+");
+        holes.push({ dist, face });
       }
-      holes.sort((a, b) => a - b);
-      const key = b.length + "|" + holes.join(",");
+      holes.sort((a, b) => a.dist - b.dist || a.face.localeCompare(b.face));
+      const key = b.length + "|" + holes.map((h) => `${h.dist}${h.face}`).join(",");
       if (!groups.has(key)) groups.set(key, { length: b.length, holes, qty: 0 });
       groups.get(key).qty++;
     }

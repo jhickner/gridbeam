@@ -154,14 +154,15 @@ export function openExportView(doc, screenshotDataUrl, { minimalMode = false } =
   <h2>Drilling Instructions (minimal-hole mode)</h2>
   <p style="color:#888;font-size:12px;">
     Each hole is a single through-hole drilled perpendicular to the length of
-    the 2×2. Positions are measured from the nearest end of the beam, so the
-    beam can be oriented either way during assembly.
+    the 2×2. Positions are measured from the nearest end. Face A and Face B
+    are the two perpendicular drill directions — mark one face of each beam
+    as A before drilling.
   </p>
   <table>
     <thead><tr>
       <th style="width:70px;">Length</th>
       <th class="qty" style="width:50px;">Qty</th>
-      <th>Holes (from nearest end)</th>
+      <th>Holes (distance from end · face)</th>
     </tr></thead>
     <tbody>
       ${drillingRows.length ? drillingRows.map((r) => `
@@ -169,7 +170,15 @@ export function openExportView(doc, screenshotDataUrl, { minimalMode = false } =
           <td>${fmtIn(r.length)}</td>
           <td class="qty">${r.qty}</td>
           <td>${r.holes.length
-            ? r.holes.map(fmtIn).join(" &nbsp; · &nbsp; ")
+            ? (() => {
+                const aHoles = r.holes.filter((h) => h.face.includes("A"));
+                const bHoles = r.holes.filter((h) => h.face.includes("B"));
+                const fmtList = (arr) => arr.map((h) => fmtIn(h.dist)).join(" &nbsp; · &nbsp; ");
+                let out = "";
+                if (aHoles.length) out += `<div><span style="color:#4acfff;">A:</span> ${fmtList(aHoles)}</div>`;
+                if (bHoles.length) out += `<div><span style="color:#4acfff;">B:</span> ${fmtList(bHoles)}</div>`;
+                return out || "<em>no holes</em>";
+              })()
             : "<em>no holes (not bolted to anything)</em>"}</td>
         </tr>
       `).join("") : `<tr><td colspan="3"><em>none</em></td></tr>`}

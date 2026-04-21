@@ -21,10 +21,11 @@
         <button id="btn-mode-orbit" class="mode-btn active" title="Orbit mode: drag empty space to orbit">Orbit</button>
         <button id="btn-mode-select" class="mode-btn" title="Select mode: drag empty space to marquee-select">Select</button>
       </span>
-      <button id="btn-add-beam">+ Beam</button>
-      <button id="btn-add-panel">+ Panel</button>
-      <!-- Fixture buttons are generated from src/fixtures.js and inserted here -->
-      <button id="btn-add-mattress" hidden></button>
+      <select id="add-type-select">
+        <option value="beam">Beam</option>
+        <option value="panel">Panel</option>
+      </select>
+      <button id="btn-add">+</button>
       <span class="sep"></span>
       <button id="btn-undo" title="Cmd/Ctrl+Z">Undo</button>
       <button id="btn-redo" title="Shift+Cmd/Ctrl+Z">Redo</button>
@@ -41,7 +42,7 @@
         <option value="none">No Environment</option>
         <option value="dome-30">30' Dome</option>
       </select>
-      <span id="hint">drag · R rotate · Q/E up/dn · [ ] resize · Del</span>
+      <span id="hint">drag · R rotate · T/⇧T ±5° · Q/E up/dn · [ ] resize · Del</span>
     </header>
     <div id="main">
       <div id="canvas-wrap"></div>
