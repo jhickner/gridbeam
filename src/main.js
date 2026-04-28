@@ -720,6 +720,25 @@ window.addEventListener("keydown", (e) => {
     selectedIds.clear();
     return;
   }
+  // Tab — cycle through beams of the same length as the current selection.
+  if (e.key === "Tab") {
+    e.preventDefault();
+    const pid = primaryId();
+    if (!pid) return;
+    const cur = getObject(pid);
+    if (!cur || cur.type !== "beam") return;
+    const doc = getDoc();
+    const sameLen = doc.objects.filter((o) => o.type === "beam" && o.length === cur.length);
+    if (sameLen.length < 2) return;
+    const idx = sameLen.findIndex((o) => o.id === pid);
+    const next = sameLen[(idx + (e.shiftKey ? sameLen.length - 1 : 1)) % sameLen.length];
+    const members = groupMembers(next.id);
+    selectedIds.clear();
+    for (const m of members) selectedIds.add(m);
+    refreshOutlines();
+    refreshSidebar();
+    return;
+  }
   if (e.key === "Escape") {
     selectedIds.clear();
     refreshOutlines();

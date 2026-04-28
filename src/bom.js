@@ -88,13 +88,15 @@ export function computeBom(doc, { minimalMode = false, connections = null } = {}
       for (const [i, axes] of holeMap) {
         const off = offs[i];
         if (off === undefined) continue;
-        const dist = +Math.min(off, b.length - off).toFixed(3);
+        // Always measure from the same end (hole-index-0 side).
+        const fromStart = +off.toFixed(3);
+        const fromEnd = +(b.length - off).toFixed(3);
         const faceLabels = [...axes].map((ax) => ax === perps[0] ? "A" : "B").sort();
         const face = faceLabels.join("+");
-        holes.push({ dist, face });
+        holes.push({ fromStart, fromEnd, face });
       }
-      holes.sort((a, b) => a.dist - b.dist || a.face.localeCompare(b.face));
-      const key = b.length + "|" + holes.map((h) => `${h.dist}${h.face}`).join(",");
+      holes.sort((a, b) => a.fromStart - b.fromStart || a.face.localeCompare(b.face));
+      const key = b.length + "|" + holes.map((h) => `${h.fromStart}/${h.fromEnd}${h.face}`).join(",");
       if (!groups.has(key)) groups.set(key, { length: b.length, holes, qty: 0 });
       groups.get(key).qty++;
     }

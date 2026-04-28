@@ -153,37 +153,49 @@ export function openExportView(doc, screenshotDataUrl, { minimalMode = false } =
   ${drillingRows ? `
   <h2>Drilling Instructions (minimal-hole mode)</h2>
   <p style="color:#888;font-size:12px;">
-    Each hole is a single through-hole drilled perpendicular to the length of
-    the 2×2. Positions are measured from the nearest end. Face A and Face B
-    are the two perpendicular drill directions — mark one face of each beam
-    as A before drilling.
+    Each diagram shows a beam from the side. Face A holes are on top,
+    face B holes on the bottom. Mark one face of each beam as A before drilling.
   </p>
-  <table>
-    <thead><tr>
-      <th style="width:70px;">Length</th>
-      <th class="qty" style="width:50px;">Qty</th>
-      <th>Holes (distance from end · face)</th>
-    </tr></thead>
-    <tbody>
-      ${drillingRows.length ? drillingRows.map((r) => `
-        <tr>
-          <td>${fmtIn(r.length)}</td>
-          <td class="qty">${r.qty}</td>
-          <td>${r.holes.length
-            ? (() => {
-                const aHoles = r.holes.filter((h) => h.face.includes("A"));
-                const bHoles = r.holes.filter((h) => h.face.includes("B"));
-                const fmtList = (arr) => arr.map((h) => fmtIn(h.dist)).join(" &nbsp; · &nbsp; ");
-                let out = "";
-                if (aHoles.length) out += `<div><span style="color:#4acfff;">A:</span> ${fmtList(aHoles)}</div>`;
-                if (bHoles.length) out += `<div><span style="color:#4acfff;">B:</span> ${fmtList(bHoles)}</div>`;
-                return out || "<em>no holes</em>";
-              })()
-            : "<em>no holes (not bolted to anything)</em>"}</td>
-        </tr>
-      `).join("") : `<tr><td colspan="3"><em>none</em></td></tr>`}
-    </tbody>
-  </table>
+  ${drillingRows.length ? drillingRows.map((r) => {
+    // SVG diagram: beam shown as a rectangle, holes as circles on face A (top) / face B (bottom).
+    const PX_PER_IN = 6;
+    const beamW = Math.max(r.length * PX_PER_IN, 60);
+    const beamH = 28;
+    const padL = 10, padR = 40, padY = 22;
+    const svgW = beamW + padL + padR;
+    const svgH = beamH + padY * 2;
+    const bx = padL, by = padY;
+    const holeR = 5;
+
+    const aHoles = r.holes.filter((h) => h.face.includes("A"));
+    const bHoles = r.holes.filter((h) => h.face.includes("B"));
+
+    const holeSvg = (holes, cy, color) => holes.map((h) => {
+      const cx = bx + (h.fromStart / r.length) * beamW;
+      return `<circle cx="${cx.toFixed(1)}" cy="${cy}" r="${holeR}" fill="${color}" fill-opacity="0.8"/>`
+        + `<text x="${cx.toFixed(1)}" y="${cy + (cy < by + beamH / 2 ? -10 : 16)}" text-anchor="middle" fill="#aaa" font-size="9" font-family="ui-monospace,Menlo,monospace">${fmtIn(h.fromStart)}</text>`;
+    }).join("");
+
+    return `
+      <div style="margin:16px 0;">
+        <div style="color:#ccc;font-size:12px;margin-bottom:4px;">
+          <strong>${fmtIn(r.length)}</strong> beam × ${r.qty}
+        </div>
+        <svg width="${svgW}" height="${svgH}" viewBox="0 0 ${svgW} ${svgH}" style="background:#111;border:1px solid #333;border-radius:4px;">
+          <!-- Beam body -->
+          <rect x="${bx}" y="${by}" width="${beamW}" height="${beamH}" fill="#6b5030" stroke="#8a6a4a" rx="2"/>
+          <!-- Length dimension -->
+          <text x="${bx + beamW + 6}" y="${by + beamH / 2 + 4}" fill="#888" font-size="10" font-family="ui-monospace,Menlo,monospace">${fmtIn(r.length)}</text>
+          <!-- Face labels -->
+          <text x="${bx - 2}" y="${by - 4}" fill="#4acfff" font-size="9" font-family="sans-serif">A</text>
+          <text x="${bx - 2}" y="${by + beamH + 12}" fill="#ff8844" font-size="9" font-family="sans-serif">B</text>
+          <!-- Face A holes (top edge) -->
+          ${holeSvg(aHoles, by, "#4acfff")}
+          <!-- Face B holes (bottom edge) -->
+          ${holeSvg(bHoles, by + beamH, "#ff8844")}
+        </svg>
+      </div>`;
+  }).join("") : `<p><em>No drilling needed.</em></p>`}
   ` : ""}
 
   <h2>Panel Cut List (1/4" hardboard)</h2>
