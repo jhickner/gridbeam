@@ -150,6 +150,33 @@ const loftMarkerMat = new THREE.MeshBasicMaterial({
   color: 0xff8833, transparent: true, opacity: 0.6, side: THREE.DoubleSide,
 });
 
+// ------- Move HUD (shows top/bottom height of selection while moving) -------
+const moveHud = document.getElementById("move-hud");
+let moveHudTimeout = null;
+
+function showMoveHud() {
+  if (!hasSel()) { hideHud(); return; }
+  let minY = Infinity, maxY = -Infinity;
+  for (const id of selectedIds) {
+    const o = getObject(id);
+    if (!o) continue;
+    const [mn, mx] = bbox(o);
+    if (mn[1] < minY) minY = mn[1];
+    if (mx[1] > maxY) maxY = mx[1];
+  }
+  if (!isFinite(minY)) { hideHud(); return; }
+  moveHud.innerHTML = `Bottom: ${fmtIn(minY)}<br>Top: ${fmtIn(maxY)}`;
+  moveHud.style.display = "block";
+  clearTimeout(moveHudTimeout);
+  moveHudTimeout = setTimeout(hideHud, 1500);
+}
+
+function hideHud() {
+  moveHud.style.display = "none";
+  clearTimeout(moveHudTimeout);
+  moveHudTimeout = null;
+}
+
 // ------- Multi-selection -------
 const selectedIds = new Set();
 // One Box3Helper per selected object; rebuilt when selection changes.
@@ -587,6 +614,7 @@ function onPointerMove(e) {
   for (const it of drag.items) {
     setPosLive(it.id, [it.startPos[0] + dx, it.startPos[1], it.startPos[2] + dz]);
   }
+  showMoveHud();
 }
 
 function onPointerUp() {
@@ -600,6 +628,7 @@ function onPointerUp() {
   controls.enabled = true;
   document.body.classList.remove("dragging");
   endLive();
+  showMoveHud(); // show final position briefly, then auto-hide
 }
 
 renderer.domElement.addEventListener("pointerdown", onPointerDown);
@@ -783,11 +812,13 @@ window.addEventListener("keydown", (e) => {
     if (!canMoveSelY(-SNAP)) return;
     mutateSelection((o) =>
       updateObject(o.id, { pos: [o.pos[0], o.pos[1] - SNAP, o.pos[2]] }, { commit: false }));
+    showMoveHud();
     return;
   }
   if (e.key === "e" || e.key === "E") {
     mutateSelection((o) =>
       updateObject(o.id, { pos: [o.pos[0], o.pos[1] + SNAP, o.pos[2]] }, { commit: false }));
+    showMoveHud();
     return;
   }
   // Arrow keys — nudge selected objects by one 1.5" step on the ground plane.
@@ -797,6 +828,7 @@ window.addEventListener("keydown", (e) => {
     const dz = e.key === "ArrowUp" ? -SNAP : e.key === "ArrowDown" ? SNAP : 0;
     mutateSelection((o) =>
       updateObject(o.id, { pos: [o.pos[0] + dx, o.pos[1], o.pos[2] + dz] }, { commit: false }));
+    showMoveHud();
     return;
   }
   // [ / ] — shrink/grow beams (length) or panels (W and H) by one 1.5" step.

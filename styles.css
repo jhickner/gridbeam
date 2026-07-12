@@ -47,6 +47,12 @@ body { background: #1a1a1a; color: #ddd; }
 #summary th { color: #888; font-weight: normal; }
 #sel-empty { color: #666; font-style: italic; }
 .dragging #canvas-wrap { cursor: grabbing; }
+#move-hud {
+  position: absolute; top: 8px; left: 8px; z-index: 10;
+  background: rgba(0,0,0,0.7); color: #eee; padding: 4px 8px;
+  border-radius: 4px; font-size: 11px; font-family: ui-monospace, Menlo, monospace;
+  pointer-events: none; display: none; line-height: 1.5;
+}
 #marquee {
   position: absolute; pointer-events: none; z-index: 10;
   border: 2px dashed #00e5ff;
