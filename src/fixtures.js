@@ -16,6 +16,20 @@ import * as THREE from "three";
 //                just pick one.
 //   color      — display color.
 //   opacity    — 0..1, defaults to 1.
+
+// 13" MacBook Pro, modeled open (base + tilted screen) rather than as a
+// closed slab. Canonical orientation (axis "x"): width along X, base depth
+// along Z, hinge along the back edge (z = LAPTOP_BASE_DEPTH).
+const LAPTOP_WIDTH = 11.97;
+const LAPTOP_BASE_DEPTH = 8.36;
+const LAPTOP_BASE_H = 0.6;
+const LAPTOP_SCREEN_H = 8.4;
+const LAPTOP_SCREEN_THICK = 0.25;
+const LAPTOP_TILT = THREE.MathUtils.degToRad(12); // lean past vertical
+// Overall AABB of the opened assembly — used for dims/selection/collision.
+const LAPTOP_TOTAL_H = LAPTOP_BASE_H + LAPTOP_SCREEN_H * Math.cos(LAPTOP_TILT);
+const LAPTOP_TOTAL_DEPTH = LAPTOP_BASE_DEPTH + LAPTOP_SCREEN_H * Math.sin(LAPTOP_TILT);
+
 export const FIXTURES = {
   "crib-mattress": {
     label: "Crib Mattress",
@@ -28,6 +42,11 @@ export const FIXTURES = {
     dims: [38, 6, 75], // 38" × 75" footprint (twin), 6" thick
     color: 0xc6cfe6,
     opacity: 0.65,
+  },
+  "macbook-pro-13": {
+    label: '13" MacBook Pro (open)',
+    dims: [LAPTOP_TOTAL_DEPTH, LAPTOP_TOTAL_H, LAPTOP_WIDTH], // opened AABB
+    color: 0xaeb0b4,
   },
 };
 
@@ -57,11 +76,61 @@ function materialFor(kind) {
   return m;
 }
 
+const screenMat = new THREE.MeshStandardMaterial({ color: 0x1c1c1e, roughness: 0.4, metalness: 0.2 });
+
+// Base + tilted screen, built in canonical orientation (width along local X,
+// base depth along local Z, hinge at z = LAPTOP_BASE_DEPTH). Occupies the
+// local box x:[0,LAPTOP_WIDTH] y:[0,LAPTOP_TOTAL_H] z:[0,LAPTOP_TOTAL_DEPTH].
+function buildMacbookAssembly(id) {
+  const asm = new THREE.Group();
+
+  const base = new THREE.Mesh(
+    new THREE.BoxGeometry(LAPTOP_WIDTH, LAPTOP_BASE_H, LAPTOP_BASE_DEPTH),
+    materialFor("macbook-pro-13")
+  );
+  base.position.set(LAPTOP_WIDTH / 2, LAPTOP_BASE_H / 2, LAPTOP_BASE_DEPTH / 2);
+  base.userData.id = id;
+  asm.add(base);
+
+  // Screen hinges off the back-top edge of the base, leaning back by
+  // LAPTOP_TILT past vertical.
+  const hinge = new THREE.Group();
+  hinge.position.set(0, LAPTOP_BASE_H, LAPTOP_BASE_DEPTH);
+  hinge.rotation.x = LAPTOP_TILT;
+  const screen = new THREE.Mesh(
+    new THREE.BoxGeometry(LAPTOP_WIDTH, LAPTOP_SCREEN_H, LAPTOP_SCREEN_THICK),
+    screenMat
+  );
+  screen.position.set(LAPTOP_WIDTH / 2, LAPTOP_SCREEN_H / 2, 0);
+  screen.userData.id = id;
+  hinge.add(screen);
+  asm.add(hinge);
+
+  return asm;
+}
+
 export function buildFixtureMesh(o) {
   const group = new THREE.Group();
   group.userData.id = o.id;
   group.userData.type = "fixture";
   group.userData.kind = o.kind;
+
+  if (o.kind === "macbook-pro-13") {
+    const asm = buildMacbookAssembly(o.id);
+    if (o.axis === "z") {
+      // Rotate the canonical (axis "x") assembly 90° about Y so its width
+      // runs along Z, matching fixtureDims' axis swap.
+      const wrapper = new THREE.Group();
+      wrapper.rotation.y = Math.PI / 2;
+      wrapper.position.set(0, 0, LAPTOP_WIDTH);
+      wrapper.add(asm);
+      group.add(wrapper);
+    } else {
+      group.add(asm);
+    }
+    group.position.set(o.pos[0], o.pos[1], o.pos[2]);
+    return group;
+  }
 
   const dims = fixtureDims(o.kind, o.axis);
   const mesh = new THREE.Mesh(new THREE.BoxGeometry(...dims), materialFor(o.kind));

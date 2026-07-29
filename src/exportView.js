@@ -1,4 +1,4 @@
-import { computeBom, expandCuts, expandPanels, packPanelSheets, SHEET_PRICE } from "./bom.js";
+import { computeBom, expandCuts, expandPanels, groupPanelsByMaterial, packPanelSheets, SHEET_PRICES } from "./bom.js";
 import { fmtIn } from "./grid.js";
 
 export function openExportView(doc, screenshotDataUrl, { minimalMode = false } = {}) {
@@ -7,31 +7,56 @@ export function openExportView(doc, screenshotDataUrl, { minimalMode = false } =
   const cutHtml = cutRows.length
     ? cutRows.map((r) => `<tr><td>${fmtIn(r.length)}</td><td>${r.qty}</td></tr>`).join("")
     : `<tr><td colspan="2"><em>none</em></td></tr>`;
-  const panelHtml = panelRows.length
-    ? panelRows.map((r) => `<tr><td>${fmtIn(r.w)} × ${fmtIn(r.h)}</td><td>${r.qty}</td></tr>`).join("")
-    : `<tr><td colspan="2"><em>none</em></td></tr>`;
+  const MATERIAL_LABEL = {
+    plywood: 'Hardboard (3/16")',
+    pegboard: 'Peg Board (1/8")',
+    "pegboard-aluminum": 'Aluminum Peg Board (1/8")',
+    "pegboard-black-aluminum": 'Black Aluminum Peg Board (1/8")',
+    wood: 'Wood (1/2")',
+  };
+
+  // Panel cut list, split into one table per material.
+  const panelsByMaterial = new Map();
+  for (const r of panelRows) {
+    const material = r.material || "plywood";
+    if (!panelsByMaterial.has(material)) panelsByMaterial.set(material, []);
+    panelsByMaterial.get(material).push(r);
+  }
+  const panelCutListHtml = panelRows.length
+    ? [...panelsByMaterial.entries()].map(([material, rows]) => `
+        <h3 style="margin-top:14px;color:#ccc;font-size:14px;">${MATERIAL_LABEL[material] || material}</h3>
+        <table><thead><tr><th>Size</th><th class="qty">Qty</th></tr></thead><tbody>
+          ${rows.map((r) => `<tr><td>${fmtIn(r.w)} × ${fmtIn(r.h)}</td><td>${r.qty}</td></tr>`).join("")}
+        </tbody></table>
+      `).join("")
+    : `<table><tbody><tr><td colspan="2"><em>none</em></td></tr></tbody></table>`;
   const hwHtml = hardware.map((r) => `<tr><td>${r.item}</td><td>${r.qty}</td></tr>`).join("");
 
   // Flat list of required cuts — consumed by the popup's inline script that
   // re-packs the stock when the user changes the stock-length input.
   const cutsJson = JSON.stringify(expandCuts(cutRows));
 
-  // Panel sheet packing.
+  // Panel sheet packing — plywood and pegboard are different stock, so each
+  // material is packed (and priced) onto its own set of sheets.
   const allPanels = expandPanels(panelRows);
-  const panelPack = packPanelSheets(allPanels);
-  let panelStockHtml = "";
-  if (allPanels.length) {
-    const totalCost = (panelPack.totalSheets * SHEET_PRICE).toFixed(2);
-    const pct = panelPack.totalSheets
-      ? Math.round((panelPack.usedArea / (panelPack.totalSheets * 48 * 96)) * 100) : 0;
-    let summary = `<strong>${panelPack.totalSheets}</strong> × 4'×8' sheet`
-      + (panelPack.totalSheets === 1 ? "" : "s")
-      + ` @ $${SHEET_PRICE.toFixed(2)} = <strong>$${totalCost}</strong><br>`
+  const panelGroups = groupPanelsByMaterial(allPanels);
+
+  // Generate SVG cut diagrams + tables for one material's sheet packing.
+  // Returns { html, cost } — cost is pulled out separately for the grand total.
+  function renderSheetPlan(material, panels) {
+    const pack = packPanelSheets(panels);
+    const price = SHEET_PRICES[material] ?? SHEET_PRICES.plywood;
+    const cost = pack.totalSheets * price;
+    const totalCost = cost.toFixed(2);
+    const pct = pack.totalSheets
+      ? Math.round((pack.usedArea / (pack.totalSheets * 48 * 96)) * 100) : 0;
+    let summary = `<strong>${pack.totalSheets}</strong> × 4'×8' sheet`
+      + (pack.totalSheets === 1 ? "" : "s")
+      + ` @ $${price.toFixed(2)} = <strong>$${totalCost}</strong><br>`
       + `${pct}% utilization`;
-    if (panelPack.oversize.length) {
-      summary += `<div class="warn">⚠ ${panelPack.oversize.length} panel(s) exceed 4'×8' sheet size</div>`;
+    if (pack.oversize.length) {
+      summary += `<div class="warn">⚠ ${pack.oversize.length} panel(s) exceed 4'×8' sheet size</div>`;
     }
-    // Generate SVG cut diagrams for each sheet.
     // Scale: fit 48"×96" sheet into a reasonable on-screen width.
     const SVG_W = 380;                         // px width of each diagram
     const SCALE = SVG_W / 48;                  // px per inch (sheet short side = width)
@@ -43,7 +68,7 @@ export function openExportView(doc, screenshotDataUrl, { minimalMode = false } =
       "#5bb9a8", "#b96a8c", "#7ab95b", "#5b6fb9", "#b98a5b",
     ];
 
-    const sheetDiagrams = panelPack.sheets.map((sh, si) => {
+    const sheetDiagrams = pack.sheets.map((sh, si) => {
       let rects = "";
       sh.cuts.forEach((c, ci) => {
         const x = c.x * SCALE;
@@ -74,14 +99,14 @@ export function openExportView(doc, screenshotDataUrl, { minimalMode = false } =
         </div>`;
     }).join("");
 
-    const sheetRows = panelPack.sheets.map((sh, i) =>
+    const sheetRows = pack.sheets.map((sh, i) =>
       `<tr class="board-row"><td>#${i + 1}</td><td>${
         sh.cuts.map((c) => `${fmtIn(c.w)} × ${fmtIn(c.h)}`).join(" &nbsp;+&nbsp; ")
       }</td></tr>`
     ).join("");
 
-    panelStockHtml = `
-      <h2>Panel Sheet Plan</h2>
+    const html = `
+      <h3 style="margin-top:16px;color:#ccc;font-size:14px;">${MATERIAL_LABEL[material] || material}</h3>
       <div class="summary">${summary}</div>
       <table style="margin-top:10px;">
         <thead><tr><th style="width:70px;">Sheet</th><th>Cuts</th></tr></thead>
@@ -89,6 +114,15 @@ export function openExportView(doc, screenshotDataUrl, { minimalMode = false } =
       </table>
       ${sheetDiagrams}
     `;
+    return { html, cost };
+  }
+
+  let panelStockHtml = "";
+  let panelTotalCost = 0;
+  if (allPanels.length) {
+    const plans = [...panelGroups.entries()].map(([material, panels]) => renderSheetPlan(material, panels));
+    panelStockHtml = `<h2>Panel Sheet Plan</h2>` + plans.map((p) => p.html).join("");
+    panelTotalCost = plans.reduce((s, p) => s + p.cost, 0);
   }
 
   const html = `<!doctype html>
@@ -198,8 +232,8 @@ export function openExportView(doc, screenshotDataUrl, { minimalMode = false } =
   }).join("") : `<p><em>No drilling needed.</em></p>`}
   ` : ""}
 
-  <h2>Panel Cut List (1/4" hardboard)</h2>
-  <table><thead><tr><th>Size</th><th class="qty">Qty</th></tr></thead><tbody>${panelHtml}</tbody></table>
+  <h2>Panel Cut List</h2>
+  ${panelCutListHtml}
 
   ${panelStockHtml}
 
@@ -207,8 +241,13 @@ export function openExportView(doc, screenshotDataUrl, { minimalMode = false } =
   <p style="color:#666;font-size:12px;">${nConn} bolted connection${nConn === 1 ? "" : "s"} inferred from proximity.</p>
   <table><thead><tr><th>Item</th><th class="qty">Qty</th></tr></thead><tbody>${hwHtml}</tbody></table>
 
+  <h2>Total Cost</h2>
+  <div id="total-cost-summary" class="summary"></div>
+  <p style="color:#666;font-size:12px;margin-top:4px;">Hardware is not priced above and isn't included in this total.</p>
+
 <script>
   const CUTS = ${cutsJson};
+  const PANEL_TOTAL_COST = ${panelTotalCost};
 
   function fmtIn(n) {
     const neg = n < 0 ? '-' : '';
@@ -244,6 +283,14 @@ export function openExportView(doc, screenshotDataUrl, { minimalMode = false } =
   // Board length (feet) → unit price. Keep in sync with the select above.
   const PRICES = { 8: 3.85, 10: 6.75, 12: 8.12 };
 
+  function updateTotalCost(lumberCost) {
+    const totalEl = document.getElementById('total-cost-summary');
+    const grand = lumberCost + PANEL_TOTAL_COST;
+    totalEl.innerHTML = 'Lumber $' + lumberCost.toFixed(2)
+      + ' + Panels $' + PANEL_TOTAL_COST.toFixed(2)
+      + ' = <strong>$' + grand.toFixed(2) + '</strong>';
+  }
+
   function render() {
     const stockFeet = parseFloat(document.getElementById('stock-in').value);
     const out = document.querySelector('#stock-table tbody');
@@ -251,6 +298,7 @@ export function openExportView(doc, screenshotDataUrl, { minimalMode = false } =
     if (!isFinite(stockFeet) || stockFeet <= 0) {
       out.innerHTML = '';
       summary.textContent = 'Enter a valid stock length.';
+      updateTotalCost(0);
       return;
     }
     const stockLen = stockFeet * 12;
@@ -265,7 +313,8 @@ export function openExportView(doc, screenshotDataUrl, { minimalMode = false } =
     const totalBoards = Math.ceil(totalRails / 2); // actual 2×4s to buy
     const totalStock = totalRails * stockLen; // total linear inches of rail
     const pct = totalStock ? Math.round((plan.totalCut / totalStock) * 100) : 0;
-    const totalCost = (totalBoards * unitPrice).toFixed(2);
+    const lumberCost = totalBoards * unitPrice;
+    const totalCost = lumberCost.toFixed(2);
     let s = '<strong>' + totalBoards + '</strong> × ' + stockFt + ' 2×4'
           + ' @ $' + unitPrice.toFixed(2) + ' = <strong>$' + totalCost + '</strong>'
           + ' &nbsp;(' + totalRails + ' rail' + (totalRails === 1 ? '' : 's') + ' of 2×2)<br>'
@@ -277,6 +326,7 @@ export function openExportView(doc, screenshotDataUrl, { minimalMode = false } =
         + plan.overLength.map(fmtIn).join(', ') + '</div>';
     }
     summary.innerHTML = s;
+    updateTotalCost(lumberCost);
 
     if (!plan.boards.length) { out.innerHTML = '<tr><td colspan="3"><em>no cuts</em></td></tr>'; return; }
 

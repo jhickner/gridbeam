@@ -43,8 +43,9 @@ export function computeBom(doc, { minimalMode = false, connections = null } = {}
 
   const panelList = {};
   for (const p of panels) {
-    const key = `${p.w}x${p.h}`;
-    panelList[key] = panelList[key] || { w: p.w, h: p.h, qty: 0 };
+    const material = p.material || "plywood";
+    const key = `${p.w}x${p.h}:${material}`;
+    panelList[key] = panelList[key] || { w: p.w, h: p.h, material, qty: 0 };
     panelList[key].qty++;
   }
   const panelRows = Object.values(panelList).sort((a, b) => b.w * b.h - a.w * a.h);
@@ -107,19 +108,40 @@ export function computeBom(doc, { minimalMode = false, connections = null } = {}
 }
 
 // ---------------------------------------------------------------------------
-// 2D guillotine bin-packing for panel sheets (4'×8' hardboard).
+// 2D guillotine bin-packing for panel sheets (4'×8' stock).
 // ---------------------------------------------------------------------------
 const SHEET_W = 48;   // inches (4')
 const SHEET_H = 96;   // inches (8')
-export const SHEET_PRICE = 22.52;
+// Per-material 4'×8' sheet price — plywood/hardboard and pegboard are
+// different stock and shouldn't be packed onto (or costed as) the same sheet.
+export const SHEET_PRICES = {
+  plywood: 22.52,
+  pegboard: 23.98,
+  "pegboard-aluminum": 74.99,
+  "pegboard-black-aluminum": 84.99,
+  wood: 68,
+};
+export const SHEET_PRICE = SHEET_PRICES.plywood; // back-compat default
 
-// Expand panelRows into individual rectangles.
+// Expand panelRows into individual rectangles, keeping material so callers
+// can pack/price each material's sheets separately.
 export function expandPanels(panelRows) {
   const out = [];
   for (const r of panelRows) {
-    for (let i = 0; i < r.qty; i++) out.push({ w: r.w, h: r.h });
+    for (let i = 0; i < r.qty; i++) out.push({ w: r.w, h: r.h, material: r.material || "plywood" });
   }
   return out;
+}
+
+// Group expanded panels by material — one packPanelSheets() call per group.
+export function groupPanelsByMaterial(panels) {
+  const groups = new Map();
+  for (const p of panels) {
+    const material = p.material || "plywood";
+    if (!groups.has(material)) groups.set(material, []);
+    groups.get(material).push(p);
+  }
+  return groups;
 }
 
 // Try to place a panel (possibly rotated) into one of the available

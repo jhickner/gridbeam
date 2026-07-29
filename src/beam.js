@@ -1,5 +1,5 @@
 import * as THREE from "three";
-import { BEAM_SIZE, holeOffsets } from "./grid.js";
+import { BEAM_SIZE, holeOffsets, beamTiltTransform, rotateByEuler } from "./grid.js";
 
 const beamMat = new THREE.MeshStandardMaterial({ color: 0xc79a63, roughness: 0.8 });
 const holeMat = new THREE.MeshBasicMaterial({ color: 0x1a1a1a });
@@ -64,7 +64,12 @@ export function buildBeamMesh(o, boltedIdx, minimalMode = false) {
     }
   }
 
-  group.position.set(o.pos[0], o.pos[1], o.pos[2]);
+  // Tilt swings the beam about its low-end bolt hole (see beamTiltTransform):
+  // the rotation is about the group origin, and the offset shifts the group so
+  // the bolt point stays fixed — as if the beam were hinged on that bolt.
+  const { euler, offset } = beamTiltTransform(axis, o.tilt, length);
+  group.position.set(o.pos[0] + offset[0], o.pos[1] + offset[1], o.pos[2] + offset[2]);
+  group.rotation.set(euler.x, euler.y, euler.z);
   return group;
 }
 
@@ -73,13 +78,14 @@ export function buildBeamMesh(o, boltedIdx, minimalMode = false) {
 export function beamHoleWorldPositions(o) {
   const out = [];
   const offs = holeOffsets(o.length);
+  // Tilt rotates each hole about the end-bolt pivot; world = pos + offset + R·h.
+  const { euler, offset } = beamTiltTransform(o.axis, o.tilt, o.length);
   for (const off of offs) {
-    const p = o.pos.slice();
-    if (o.axis === "x") p[0] += off; else if (o.axis === "y") p[1] += off; else p[2] += off;
-    if (o.axis !== "x") p[0] += BEAM_SIZE / 2;
-    if (o.axis !== "y") p[1] += BEAM_SIZE / 2;
-    if (o.axis !== "z") p[2] += BEAM_SIZE / 2;
-    out.push(p);
+    // Hole center in the beam's local frame (origin at the low corner).
+    const h = [BEAM_SIZE / 2, BEAM_SIZE / 2, BEAM_SIZE / 2];
+    if (o.axis === "x") h[0] = off; else if (o.axis === "y") h[1] = off; else h[2] = off;
+    const r = rotateByEuler(h, euler);
+    out.push([o.pos[0] + offset[0] + r[0], o.pos[1] + offset[1] + r[1], o.pos[2] + offset[2] + r[2]]);
   }
   return out;
 }

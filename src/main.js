@@ -1,22 +1,33 @@
 import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 
-import { SNAP, BEAM_SIZE, PANEL_THICK, fmtIn } from "./grid.js";
+import { SNAP, BEAM_SIZE, fmtIn, nextBeamOrientation, beamTiltTransform, beamTiltEuler } from "./grid.js";
 import {
   getDoc, getObject, subscribe,
-  addBeam, addPanel, addFixture, updateObject, removeObject, removeObjects, clearAll,
+  addBeam, addPanel, addFixture, addSeforimRow, updateObject, removeObject, removeObjects, clearAll,
   setPosLive, beginLive, endLive, undo, redo, rotateSelectionY90, bbox,
   groupObjects, ungroupObjects, groupMembers,
   setGroupRotation, setGroupRotationLive, getGroupRotation, getGroupPivot,
-  computeGroupPivot, worldPosOf,
+  computeGroupPivot, worldPosOf, createPeak, setRafterFootLive,
 } from "./state.js";
 import { buildBeamMesh } from "./beam.js";
-import { buildPanelMesh } from "./panel.js";
+import { buildPanelMesh, setPanelOpacityMode } from "./panel.js";
 import { FIXTURES, buildFixtureMesh, fixtureLabel } from "./fixtures.js";
+import { buildBookMesh } from "./books.js";
 import { computeConnections } from "./connections.js";
 import { computeBom } from "./bom.js";
 import { initAutosave, downloadJson, loadFromFile } from "./io.js";
 import { openExportView } from "./exportView.js";
+
+// Panel material labels — shared by the sidebar's material switcher, the
+// BOM/summary suffixes, and the Add-type dropdown values ("panel:<key>").
+const MATERIAL_LABELS = {
+  plywood: 'Hardboard (3/16")',
+  pegboard: 'Peg board (1/8")',
+  "pegboard-aluminum": 'Aluminum peg board (1/8")',
+  "pegboard-black-aluminum": 'Black aluminum peg board (1/8")',
+  wood: 'Wood (1/2")',
+};
 
 // ------- Three.js setup -------
 const wrap = document.getElementById("canvas-wrap");
@@ -105,6 +116,32 @@ const ENVIRONMENTS = {
       return group;
     },
   },
+  "dome-16": {
+    label: "16' Dome",
+    build() {
+      const group = new THREE.Group();
+      const radius = 96; // 16' diameter = 192" → 96" radius = 8' height
+
+      const wireMat = new THREE.MeshBasicMaterial({
+        color: 0x88aacc,
+        wireframe: true,
+        transparent: true,
+        opacity: 0.25,
+        side: THREE.DoubleSide,
+      });
+
+      // Plain hemisphere on the ground — radius = height (8'), no stem wall.
+      const domeGeom = new THREE.SphereGeometry(
+        radius, 48, 24,
+        0, Math.PI * 2,
+        0, Math.PI / 2
+      );
+      const dome = new THREE.Mesh(domeGeom, wireMat);
+      group.add(dome);
+
+      return group;
+    },
+  },
 };
 
 let envMesh = null;
@@ -177,6 +214,40 @@ function hideHud() {
   moveHudTimeout = null;
 }
 
+// ------- Per-beam top-edge height labels -------
+// One floating label per selected beam, anchored above its top edge, showing
+// the world-space height (Y) of that edge — not the beam's center or its
+// pos (which is the beam's min-corner, not necessarily the top).
+const beamHeightLabelsEl = document.getElementById("beam-height-labels");
+const beamHeightLabels = new Map(); // id → HTMLElement
+
+function updateBeamHeightLabels() {
+  const seen = new Set();
+  for (const id of selectedIds) {
+    const o = getObject(id);
+    if (!o || o.type !== "beam") continue;
+    const [mn, mx] = bbox(o);
+    const cx = (mn[0] + mx[0]) / 2;
+    const cz = (mn[2] + mx[2]) / 2;
+    const s = worldToScreen(cx, mx[1], cz);
+    let el = beamHeightLabels.get(id);
+    if (!el) {
+      el = document.createElement("div");
+      el.className = "beam-height-label";
+      beamHeightLabelsEl.appendChild(el);
+      beamHeightLabels.set(id, el);
+    }
+    el.style.display = s.behind ? "none" : "block";
+    el.style.left = s.x + "px";
+    el.style.top = (s.y - 4) + "px";
+    el.textContent = fmtIn(mx[1]);
+    seen.add(id);
+  }
+  for (const [id, el] of beamHeightLabels) {
+    if (!seen.has(id)) { el.remove(); beamHeightLabels.delete(id); }
+  }
+}
+
 // ------- Multi-selection -------
 const selectedIds = new Set();
 // One Box3Helper per selected object; rebuilt when selection changes.
@@ -209,7 +280,12 @@ let cachedConnections = null;
 function disposeGroup(g) {
   g.traverse((child) => {
     if (child.geometry) child.geometry.dispose();
-    // Materials are shared module-level singletons — don't dispose them.
+    // Most materials are shared module-level singletons — don't dispose
+    // them. Books' per-instance materials (varying color per book) are
+    // tagged disposable since nothing else can reuse them.
+    if (child.material && child.material.userData && child.material.userData.disposable) {
+      child.material.dispose();
+    }
   });
 }
 
@@ -248,9 +324,12 @@ function rebuildMeshes(doc) {
         ? buildBeamMesh(o, boltedHoles.get(o.id), minimalMode)
         : o.type === "fixture"
         ? buildFixtureMesh(o)
+        : o.type === "book"
+        ? buildBookMesh(o)
         : buildPanelMesh(o, clippedCorners);
       // Position relative to pivot (local group space).
-      g.position.set(o.pos[0] - rg.pivot[0], o.pos[1], o.pos[2] - rg.pivot[1]);
+      const bp = meshBasePos(o);
+      g.position.set(bp[0] - rg.pivot[0], bp[1], bp[2] - rg.pivot[1]);
       wrapper.add(g);
       meshById.set(o.id, g);
       rotatedIds.add(o.id);
@@ -266,6 +345,8 @@ function rebuildMeshes(doc) {
       ? buildBeamMesh(o, boltedHoles.get(o.id), minimalMode)
       : o.type === "fixture"
       ? buildFixtureMesh(o)
+      : o.type === "book"
+      ? buildBookMesh(o)
       : buildPanelMesh(o, clippedCorners);
     root.add(g);
     meshById.set(o.id, g);
@@ -291,6 +372,16 @@ function rebuildMeshes(doc) {
   refreshSummary();
 }
 
+// Absolute position for an object's mesh group (before any wrapper transform).
+// Tilted beams are shifted by the tilt offset so they swing about the end bolt.
+function meshBasePos(o) {
+  if (o.type === "beam" && o.tilt) {
+    const { offset } = beamTiltTransform(o.axis, o.tilt, o.length);
+    return [o.pos[0] + offset[0], o.pos[1] + offset[1], o.pos[2] + offset[2]];
+  }
+  return [o.pos[0], o.pos[1], o.pos[2]];
+}
+
 // Fast path: only positions/rotations changed — update transforms in-place.
 function updateMeshPositions(doc) {
   // Update wrapper group rotations for rotated groups.
@@ -306,11 +397,17 @@ function updateMeshPositions(doc) {
   for (const o of doc.objects) {
     const g = meshById.get(o.id);
     if (!g) continue;
+    const bp = meshBasePos(o);
     if (o.groupRotY && o.groupPivot && rotGroupWrappers.has(o.group)) {
       // Mesh is a child of a wrapper — position relative to pivot.
-      g.position.set(o.pos[0] - o.groupPivot[0], o.pos[1], o.pos[2] - o.groupPivot[1]);
+      g.position.set(bp[0] - o.groupPivot[0], bp[1], bp[2] - o.groupPivot[1]);
     } else {
-      g.position.set(o.pos[0], o.pos[1], o.pos[2]);
+      g.position.set(bp[0], bp[1], bp[2]);
+    }
+    // Keep tilt in sync on the fast path too, so peak re-solves render live.
+    if (o.type === "beam") {
+      const t = beamTiltEuler(o.axis, o.tilt);
+      g.rotation.set(t.x, t.y, t.z);
     }
   }
   rebuildLoftIndicators(doc);
@@ -564,7 +661,10 @@ function onPointerDown(e) {
   const items = [];
   for (const sid of selectedIds) {
     const so = getObject(sid);
-    if (so) items.push({ id: sid, startPos: so.pos.slice() });
+    if (!so) continue;
+    // Peak rafters move by their foot (pos is derived); everything else by pos.
+    if (so.peak && so.foot) items.push({ id: sid, startFoot: so.foot.slice() });
+    else items.push({ id: sid, startPos: so.pos.slice() });
   }
   drag = { dragY, anchorXZ: [hit.x, hit.z], items };
   controls.enabled = false;
@@ -612,7 +712,11 @@ function onPointerMove(e) {
   }
 
   for (const it of drag.items) {
-    setPosLive(it.id, [it.startPos[0] + dx, it.startPos[1], it.startPos[2] + dz]);
+    if (it.startFoot) {
+      setRafterFootLive(it.id, [it.startFoot[0] + dx, it.startFoot[1], it.startFoot[2] + dz]);
+    } else {
+      setPosLive(it.id, [it.startPos[0] + dx, it.startPos[1], it.startPos[2] + dz]);
+    }
   }
   showMoveHud();
 }
@@ -656,6 +760,89 @@ function mutateSelection(fn) {
     if (o) fn(o);
   }
   endLive();
+}
+
+// Nudge the selection by a grid delta. Peak rafters move by their foot (pos is
+// derived); everything else moves by pos. One undo step.
+function nudgeSelected(dx, dy, dz) {
+  mutateSelection((o) => {
+    if (o.peak && o.foot) {
+      updateObject(o.id, { foot: [o.foot[0] + dx, o.foot[1] + dy, o.foot[2] + dz] }, { commit: false });
+    } else {
+      updateObject(o.id, { pos: [o.pos[0] + dx, o.pos[1] + dy, o.pos[2] + dz] }, { commit: false });
+    }
+  });
+}
+
+// Grow each selected object's size by one grid step along `axis` ("x"/"z"),
+// in the direction of `sign` (+1/-1) — the edge on the opposite side stays
+// fixed, so the object visibly extends toward the pressed arrow.
+// Only resizes the dimension that actually runs along that world axis:
+//   beam    — its own length, only if o.axis matches.
+//   panel   — w or h, whichever maps to that axis given o.normal.
+// Objects with no matching resizable dimension (fixtures, cross-axis beams,
+// a panel's vertical w/h) are left untouched.
+function growSelectedDirectional(axis, sign) {
+  const posIdx = axis === "x" ? 0 : 2;
+  mutateSelection((o) => {
+    if (o.type === "beam") {
+      if (o.axis !== axis) return;
+      if (o.peak) {
+        // A peak rafter's pos is derived from its foot/span — just grow it,
+        // the joint re-solves without needing an edge-anchored shift.
+        updateObject(o.id, { length: o.length + SNAP }, { commit: false });
+        return;
+      }
+      const patch = { length: o.length + SNAP };
+      if (sign < 0) {
+        const np = o.pos.slice(); np[posIdx] -= SNAP; patch.pos = np;
+      }
+      updateObject(o.id, patch, { commit: false });
+    } else if (o.type === "panel") {
+      let prop = null;
+      if (o.normal === "y") prop = axis === "x" ? "w" : "h";
+      else if (o.normal === "z" && axis === "x") prop = "w";
+      else if (o.normal === "x" && axis === "z") prop = "h";
+      if (!prop) return;
+      const patch = { [prop]: o[prop] + SNAP };
+      if (sign < 0) {
+        const np = o.pos.slice(); np[posIdx] -= SNAP; patch.pos = np;
+      }
+      updateObject(o.id, patch, { commit: false });
+    }
+  });
+}
+
+// Snap each selected object onto the closest surface under its footprint —
+// the top of whichever other (unselected) object's XZ footprint overlaps it
+// and is nearest by distance (whether that's above or below its current
+// position), or the ground if nothing's closer. Surface heights (e.g. a
+// panel's top) aren't generally on the 1.5" beam grid, so the result is
+// applied as an exact height rather than grid-snapped, or it'd still miss.
+const SURFACE_EPS = 1e-3;
+function snapSelectedToSurface() {
+  const doc = getDoc();
+  mutateSelection((o) => {
+    const [mn, mx] = bbox(o);
+    let bestTop = 0; // ground
+    let bestDist = Math.abs(mn[1]);
+    for (const other of doc.objects) {
+      if (other.id === o.id || selectedIds.has(other.id)) continue;
+      const [omn, omx] = bbox(other);
+      const overlapsXZ = omx[0] > mn[0] + SURFACE_EPS && omn[0] < mx[0] - SURFACE_EPS
+                       && omx[2] > mn[2] + SURFACE_EPS && omn[2] < mx[2] - SURFACE_EPS;
+      if (!overlapsXZ) continue;
+      const dist = Math.abs(omx[1] - mn[1]);
+      if (dist < bestDist) { bestDist = dist; bestTop = omx[1]; }
+    }
+    const dy = bestTop - mn[1];
+    if (Math.abs(dy) < 1e-6) return;
+    if (o.peak && o.foot) {
+      updateObject(o.id, { foot: [o.foot[0], o.foot[1] + dy, o.foot[2]] }, { commit: false, keepExactY: true });
+    } else {
+      updateObject(o.id, { pos: [o.pos[0], o.pos[1] + dy, o.pos[2]] }, { commit: false, keepExactY: true });
+    }
+  });
 }
 
 // Check whether a Y-delta would push any selected object below the ground
@@ -721,11 +908,11 @@ window.addEventListener("keydown", (e) => {
     const groupMap = new Map();
     const newIds = [];
     for (const c of clipboard) {
-      const pos = [c.pos[0] + SNAP * 2, c.pos[1], c.pos[2] + SNAP * 2];
+      const pos = [c.pos[0] + SNAP, c.pos[1], c.pos[2]];
       let newId;
-      if (c.type === "beam") newId = addBeam({ length: c.length, axis: c.axis, pos });
+      if (c.type === "beam") newId = addBeam({ length: c.length, axis: c.axis, pos, tilt: c.tilt });
       else if (c.type === "fixture") newId = addFixture({ kind: c.kind, axis: c.axis, pos });
-      else if (c.type === "panel") newId = addPanel({ w: c.w, h: c.h, normal: c.normal, pos });
+      else if (c.type === "panel") newId = addPanel({ w: c.w, h: c.h, normal: c.normal, pos, material: c.material });
       if (newId && c.group) {
         if (!groupMap.has(c.group)) groupMap.set(c.group, `g${Date.now()}_${groupMap.size}`);
         const o = getObject(newId);
@@ -745,7 +932,13 @@ window.addEventListener("keydown", (e) => {
 
   if (e.key === "Delete" || e.key === "Backspace") {
     e.preventDefault();
-    removeObjects([...selectedIds]);
+    // Deleting one peak rafter removes its partner too — a lone rafter is junk.
+    const ids = new Set(selectedIds);
+    for (const sid of selectedIds) {
+      const o = getObject(sid);
+      if (o && o.peak) for (const p of getDoc().objects) if (p.peak === o.peak) ids.add(p.id);
+    }
+    removeObjects([...ids]);
     selectedIds.clear();
     return;
   }
@@ -797,37 +990,55 @@ window.addEventListener("keydown", (e) => {
       // keeping the relative arrangement of the selected objects intact.
       rotateSelectionY90([...selectedIds]);
     } else {
-      // Single object: just cycle its own orientation axis.
+      // Single object: cycle its own orientation. Beams step through the
+      // preset list (three cardinal axes + ±45° tilts), so two beams can be
+      // set to opposing 45° tilts to form a right-angle peak.
       forEachSelected((o) => {
-        if (o.type === "beam") updateObject(o.id, { axis: cycleAxis(o.axis) });
-        else if (o.type === "fixture") {
-          // Fixtures only rotate around Y (thickness is vertical), so cycle x↔z.
+        if (o.type === "beam") {
+          const next = nextBeamOrientation(o.axis, o.tilt);
+          updateObject(o.id, { axis: next.axis, tilt: next.tilt });
+        }
+        else if (o.type === "fixture" || o.type === "book") {
+          // Fixtures/books only rotate around Y (thickness is vertical), so cycle x↔z.
           updateObject(o.id, { axis: o.axis === "x" ? "z" : "x" });
         } else updateObject(o.id, { normal: cycleAxis(o.normal) });
       });
     }
     return;
   }
-  if (e.key === "q" || e.key === "Q") {
-    if (!canMoveSelY(-SNAP)) return;
-    mutateSelection((o) =>
-      updateObject(o.id, { pos: [o.pos[0], o.pos[1] - SNAP, o.pos[2]] }, { commit: false }));
+  if (e.key === "a" || e.key === "A") {
+    nudgeSelected(0, SNAP, 0);
     showMoveHud();
     return;
   }
-  if (e.key === "e" || e.key === "E") {
-    mutateSelection((o) =>
-      updateObject(o.id, { pos: [o.pos[0], o.pos[1] + SNAP, o.pos[2]] }, { commit: false }));
+  if (e.key === "z" || e.key === "Z") {
+    if (!canMoveSelY(-SNAP)) return;
+    nudgeSelected(0, -SNAP, 0);
+    showMoveHud();
+    return;
+  }
+  // S — drop the selection straight down onto whatever's underneath it
+  // (the top of the nearest overlapping beam/panel/fixture, or the ground),
+  // rather than requiring exact A/Z nudging to match an arbitrary surface height.
+  if (e.key === "s" || e.key === "S") {
+    snapSelectedToSurface();
     showMoveHud();
     return;
   }
   // Arrow keys — nudge selected objects by one 1.5" step on the ground plane.
+  // Shift+arrow instead grows the selection's size in the pressed direction
+  // (the opposite edge stays put), rather than moving it.
   if (e.key === "ArrowLeft" || e.key === "ArrowRight" || e.key === "ArrowUp" || e.key === "ArrowDown") {
     e.preventDefault();
-    const dx = e.key === "ArrowLeft" ? -SNAP : e.key === "ArrowRight" ? SNAP : 0;
-    const dz = e.key === "ArrowUp" ? -SNAP : e.key === "ArrowDown" ? SNAP : 0;
-    mutateSelection((o) =>
-      updateObject(o.id, { pos: [o.pos[0] + dx, o.pos[1], o.pos[2] + dz] }, { commit: false }));
+    const axis = (e.key === "ArrowLeft" || e.key === "ArrowRight") ? "x" : "z";
+    const sign = (e.key === "ArrowRight" || e.key === "ArrowDown") ? 1 : -1;
+    if (e.shiftKey) {
+      growSelectedDirectional(axis, sign);
+    } else {
+      const dx = axis === "x" ? sign * SNAP : 0;
+      const dz = axis === "z" ? sign * SNAP : 0;
+      nudgeSelected(dx, 0, dz);
+    }
     showMoveHud();
     return;
   }
@@ -898,7 +1109,7 @@ function refreshSidebar() {
       </div>
       <div style="color:#888;font-size:11px;margin-top:8px;">
         Drag to move · R 90° · T/⇧T ±5° · Shift+drag rotate<br>
-        Q/E raise/lower · arrows nudge · Del<br>
+        A/Z raise/lower · S snap to surface · arrows nudge · ⇧arrow resize · Del<br>
         ${isGrouped ? "⌘⇧G ungroup" : "⌘G group"}
       </div>
     `;
@@ -909,14 +1120,16 @@ function refreshSidebar() {
   const o = getObject(id);
   if (!o) { selectedIds.clear(); refreshSidebar(); return; }
 
-  const axisField = o.type === "beam"
+  const axisField = o.peak
+    ? "" // a peak rafter's axis is fixed by the peak
+    : o.type === "beam"
     ? `<label>Axis</label>
        <select data-k="axis">
          <option value="x"${o.axis === "x" ? " selected" : ""}>X</option>
          <option value="y"${o.axis === "y" ? " selected" : ""}>Y</option>
          <option value="z"${o.axis === "z" ? " selected" : ""}>Z</option>
        </select>`
-    : o.type === "fixture"
+    : o.type === "fixture" || o.type === "book"
     ? `<label>Long side along</label>
        <select data-k="axis">
          <option value="x"${o.axis === "x" ? " selected" : ""}>X</option>
@@ -929,6 +1142,19 @@ function refreshSidebar() {
          <option value="z"${o.normal === "z" ? " selected" : ""}>Z</option>
        </select>`;
 
+  // Tilt: a peak rafter's tilt is derived (shown read-only); a free beam's tilt
+  // is an editable ±45° preset.
+  const tiltField = o.peak
+    ? `<div style="color:#888;font-size:11px;margin-top:4px;">Peak rafter — tilt ${Number(o.tilt || 0).toFixed(1)}° (auto)</div>`
+    : o.type === "beam"
+    ? `<label>Tilt</label>
+       <select data-k="tilt">
+         <option value="0"${!o.tilt ? " selected" : ""}>None</option>
+         <option value="45"${o.tilt === 45 ? " selected" : ""}>+45° (peak)</option>
+         <option value="-45"${o.tilt === -45 ? " selected" : ""}>−45° (peak)</option>
+       </select>`
+    : "";
+
   const dimFields = o.type === "beam"
     ? `<label>Length (in)</label><input type="number" step="1.5" min="3" max="120" data-k="length" value="${o.length}">`
     : o.type === "fixture"
@@ -939,22 +1165,36 @@ function refreshSidebar() {
           ? `<div style="color:#888;font-size:11px;">${fixtureLabel(o.kind)} — ${d[0]}" × ${d[2]}" × ${d[1]}" (fixed)</div>`
           : `<div style="color:#888;font-size:11px;">${o.kind}</div>`;
       })()
+    : o.type === "book"
+    ? `<div style="color:#888;font-size:11px;">
+         Book — ${fmtIn(o.width)} × ${fmtIn(o.height)} × ${fmtIn(o.depth)} (fixed)
+         <span style="display:inline-block;width:10px;height:10px;margin-left:4px;vertical-align:-1px;
+           background:#${(o.color ?? 0).toString(16).padStart(6, "0")};border:1px solid #555;"></span>
+       </div>`
     : `<label>W × H (in)</label>
        <div class="row">
          <input type="number" step="1.5" min="1.5" data-k="w" value="${o.w}">
          <input type="number" step="1.5" min="1.5" data-k="h" value="${o.h}">
-       </div>`;
+       </div>
+       <label>Material</label>
+       <select data-k="material">
+         ${Object.entries(MATERIAL_LABELS).map(([key, label]) => {
+           const selected = (o.material || "plywood") === key;
+           return `<option value="${key}"${selected ? " selected" : ""}>${label}</option>`;
+         }).join("")}
+       </select>`;
 
   const typeLabel = o.type === "fixture" ? fixtureLabel(o.kind) : o.type;
   elSelProps.innerHTML = `
     <div><strong>${typeLabel}</strong> <span style="color:#666;font-size:11px;">${o.id}</span></div>
     ${dimFields}
     ${axisField}
-    <label>Position X / Y / Z (in)</label>
+    ${tiltField}
+    <label>${o.peak ? "Foot X / Y / Z (in)" : "Position X / Y / Z (in)"}</label>
     <div class="row">
-      <input type="number" step="1.5" data-k="px" value="${o.pos[0]}">
-      <input type="number" step="1.5" data-k="py" value="${o.pos[1]}">
-      <input type="number" step="1.5" data-k="pz" value="${o.pos[2]}">
+      <input type="number" step="1.5" data-k="p0" value="${(o.peak ? o.foot : o.pos)[0]}">
+      <input type="number" step="1.5" data-k="p1" value="${(o.peak ? o.foot : o.pos)[1]}">
+      <input type="number" step="1.5" data-k="p2" value="${(o.peak ? o.foot : o.pos)[2]}">
     </div>
   `;
   elSelProps.querySelectorAll("input,select").forEach((el) => {
@@ -962,11 +1202,13 @@ function refreshSidebar() {
       const patch = {};
       const k = el.dataset.k;
       const v = el.type === "number" ? parseFloat(el.value) : el.value;
-      if (k === "px" || k === "py" || k === "pz") {
+      if (k === "p0" || k === "p1" || k === "p2") {
         const o2 = getObject(id);
-        const np = o2.pos.slice();
-        np[k === "px" ? 0 : k === "py" ? 1 : 2] = v;
-        patch.pos = np;
+        const idx = k === "p0" ? 0 : k === "p1" ? 1 : 2;
+        if (o2.peak) { const nf = o2.foot.slice(); nf[idx] = v; patch.foot = nf; }
+        else { const np = o2.pos.slice(); np[idx] = v; patch.pos = np; }
+      } else if (k === "tilt") {
+        patch.tilt = parseFloat(v); // select value is a string
       } else {
         patch[k] = v;
       }
@@ -982,7 +1224,11 @@ function refreshSummary() {
     ? cutRows.map((r) => `<tr><td>${fmtIn(r.length)}</td><td>${r.qty}</td></tr>`).join("")
     : `<tr><td colspan="2"><em>none</em></td></tr>`;
   const pan = panelRows.length
-    ? panelRows.map((r) => `<tr><td>${fmtIn(r.w)}×${fmtIn(r.h)}</td><td>${r.qty}</td></tr>`).join("")
+    ? panelRows.map((r) => {
+        const material = r.material || "plywood";
+        const suffix = material === "plywood" ? "" : ` (${MATERIAL_LABELS[material] || material})`;
+        return `<tr><td>${fmtIn(r.w)}×${fmtIn(r.h)}${suffix}</td><td>${r.qty}</td></tr>`;
+      }).join("")
     : `<tr><td colspan="2"><em>none</em></td></tr>`;
   elSummary.innerHTML = `
     <table><thead><tr><th>Beam</th><th>Qty</th></tr></thead><tbody>${cut}</tbody></table>
@@ -994,11 +1240,19 @@ function refreshSummary() {
 // ------- Toolbar wiring -------
 const LAST_BEAM_KEY = "gridbeam.lastBeamLength";
 const LAST_PANEL_KEY = "gridbeam.lastPanelDims";
+const LAST_SEFORIM_KEY = "gridbeam.lastSeforimDims";
 let lastBeamLength = localStorage.getItem(LAST_BEAM_KEY) || "12";
 let lastPanelDims = localStorage.getItem(LAST_PANEL_KEY) || "12x18";
+let lastSeforimDims = localStorage.getItem(LAST_SEFORIM_KEY) || "36x11";
 
 // Populate the add-type dropdown with fixture entries from the registry.
 const addTypeSelect = document.getElementById("add-type-select");
+{
+  const opt = document.createElement("option");
+  opt.value = "peak";
+  opt.textContent = "Peak (2 rafters)";
+  addTypeSelect.appendChild(opt);
+}
 for (const kind of Object.keys(FIXTURES)) {
   const opt = document.createElement("option");
   opt.value = `fixture:${kind}`;
@@ -1016,14 +1270,32 @@ document.getElementById("btn-add").onclick = () => {
     lastBeamLength = raw.trim();
     localStorage.setItem(LAST_BEAM_KEY, lastBeamLength);
     selectOnly(addBeam({ length: n, pos: [0, 0, 0] }));
-  } else if (val === "panel") {
+  } else if (val === "panel" || val.startsWith("panel:")) {
+    const material = val.startsWith("panel:") ? val.slice("panel:".length) : "plywood";
     const raw = prompt("Panel W × H in inches (e.g. 12x18):", lastPanelDims);
     if (raw == null) return;
     const m = /^\s*([\d.]+)\s*[xX×]\s*([\d.]+)\s*$/.exec(raw);
     if (!m) return;
     lastPanelDims = raw.trim();
     localStorage.setItem(LAST_PANEL_KEY, lastPanelDims);
-    selectOnly(addPanel({ w: parseFloat(m[1]), h: parseFloat(m[2]), pos: [0, 0, 0] }));
+    selectOnly(addPanel({ w: parseFloat(m[1]), h: parseFloat(m[2]), pos: [0, 0, 0], material }));
+  } else if (val === "seforim") {
+    const raw = prompt("Shelf width × max spine height in inches (e.g. 36x11):", lastSeforimDims);
+    if (raw == null) return;
+    const m = /^\s*([\d.]+)\s*[xX×]\s*([\d.]+)\s*$/.exec(raw);
+    if (!m) return;
+    lastSeforimDims = raw.trim();
+    localStorage.setItem(LAST_SEFORIM_KEY, lastSeforimDims);
+    const ids = addSeforimRow({ axis: "x", pos: [0, 0, 0], width: parseFloat(m[1]), height: parseFloat(m[2]) });
+    selectedIds.clear();
+    for (const id of ids) selectedIds.add(id);
+    refreshOutlines();
+    refreshSidebar();
+  } else if (val === "peak") {
+    // Two rafters joined at a shared apex; feet 24" apart, on grid. Edit each
+    // side's length (sidebar or [ ]) and the peak re-solves so the joint holds.
+    const [a] = createPeak({ axis: "x", foot: [0, 0, 0], span: 24, lenA: 18, lenB: 18 });
+    selectOnly(a); // single rafter selected so its Length/Foot show in the sidebar
   } else if (val.startsWith("fixture:")) {
     const kind = val.slice("fixture:".length);
     selectOnly(addFixture({ kind, axis: "x", pos: [0, 0, 0] }));
@@ -1088,6 +1360,20 @@ btnClipped.onclick = () => {
   rebuildMeshes(getDoc());
 };
 
+const btnPanelOpacity = document.getElementById("btn-panel-opacity");
+let panelOpaque = localStorage.getItem("gridbeam.panelOpaque") === "1";
+function syncPanelOpacityButton() {
+  btnPanelOpacity.textContent = "Panels: " + (panelOpaque ? "100%" : "50%");
+  btnPanelOpacity.style.background = panelOpaque ? "#55371f" : "";
+  setPanelOpacityMode(panelOpaque ? "opaque" : "transparent");
+}
+syncPanelOpacityButton();
+btnPanelOpacity.onclick = () => {
+  panelOpaque = !panelOpaque;
+  localStorage.setItem("gridbeam.panelOpaque", panelOpaque ? "1" : "0");
+  syncPanelOpacityButton();
+};
+
 // ------- Environment selector -------
 const envSelect = document.getElementById("env-select");
 envSelect.value = envKey;
@@ -1125,6 +1411,7 @@ function tick() {
     const g = meshById.get(id);
     if (g) helper.box.setFromObject(g);
   }
+  updateBeamHeightLabels();
   renderer.render(scene, camera);
 }
 tick();

@@ -1,14 +1,96 @@
 import * as THREE from "three";
-import { PANEL_THICK } from "./grid.js";
+import { panelThickness } from "./grid.js";
 
 const panelMat = new THREE.MeshStandardMaterial({
   color: 0x8a5a3b, roughness: 0.9, transparent: true, opacity: 0.6,
 });
 
+// Same color/finish as beams (see beam.js) — this is dimensional lumber
+// stock, not hardboard, so no transparency.
+const woodMat = new THREE.MeshStandardMaterial({ color: 0xc79a63, roughness: 0.8 });
+
 const screwMat = new THREE.MeshBasicMaterial({ color: 0xcccccc });
 const screwGeom = new THREE.CylinderGeometry(0.15, 0.15, 0.3, 8);
 
 const CHAMFER = 0.75;
+
+// Standard hardboard pegboard: 1/4" holes on 1" centers, starting 1/2" from
+// each edge — actual through-holes, punched by subtracting circles from the
+// extruded shape (not a texture).
+const PEG_SPACING = 1;
+const PEG_HOLE_R = 0.125;
+const PEG_MARGIN = 0.5;
+
+const pegboardMat = new THREE.MeshStandardMaterial({
+  color: 0xc9a66b, roughness: 0.85, transparent: true, opacity: 0.6, side: THREE.DoubleSide,
+});
+
+// Brushed aluminum pegboard — same hole pattern/thickness as the hardboard
+// version, just a metal cover panel. The scene has no environment map, so
+// high metalness alone reads as dark/flat (metals get most of their
+// brightness from reflections); a lighter base color and lower metalness
+// keep it reading as bright aluminum under plain scene lighting.
+const pegboardAluminumMat = new THREE.MeshStandardMaterial({
+  color: 0xe0e2e5, roughness: 0.4, metalness: 0.45,
+  transparent: true, opacity: 0.6, side: THREE.DoubleSide,
+});
+
+// Black anodized aluminum pegboard.
+const pegboardBlackAluminumMat = new THREE.MeshStandardMaterial({
+  color: 0x1c1c1e, roughness: 0.35, metalness: 0.8,
+  transparent: true, opacity: 0.6, side: THREE.DoubleSide,
+});
+
+// Per-material render config: which shared material to use, and whether it
+// needs the extruded/hole-punched geometry (all pegboard variants do).
+const MATERIAL_CONFIG = {
+  plywood: { mat: panelMat, pegboard: false },
+  pegboard: { mat: pegboardMat, pegboard: true },
+  "pegboard-aluminum": { mat: pegboardAluminumMat, pegboard: true },
+  "pegboard-black-aluminum": { mat: pegboardBlackAluminumMat, pegboard: true },
+  wood: { mat: woodMat, pegboard: false },
+};
+function configFor(material) {
+  return MATERIAL_CONFIG[material] || MATERIAL_CONFIG.plywood;
+}
+
+// Global panel opacity override — toggled from the toolbar. Mutating these
+// shared materials in place updates every panel mesh immediately, no rebuild
+// needed.
+const PANEL_MATERIALS = [panelMat, woodMat, pegboardMat, pegboardAluminumMat, pegboardBlackAluminumMat];
+export function setPanelOpacityMode(mode) {
+  const opacity = mode === "opaque" ? 1 : 0.5;
+  const transparent = mode !== "opaque";
+  for (const m of PANEL_MATERIALS) {
+    m.opacity = opacity;
+    m.transparent = transparent;
+  }
+}
+
+// Punch a peg grid into a shape already spanning [0,faceU] × [0,faceV].
+function addPegHoles(shape, faceU, faceV) {
+  for (let u = PEG_MARGIN; u <= faceU - PEG_MARGIN + 1e-6; u += PEG_SPACING) {
+    for (let v = PEG_MARGIN; v <= faceV - PEG_MARGIN + 1e-6; v += PEG_SPACING) {
+      const hole = new THREE.Path();
+      hole.absarc(u, v, PEG_HOLE_R, 0, Math.PI * 2, true);
+      shape.holes.push(hole);
+    }
+  }
+}
+
+// Extruded panel geometry (outer boundary + optional peg holes), cached by
+// the parameters that affect its shape.
+const panelGeomCache = new Map(); // "faceU,faceV,clipped,pegboard,thickness" → BufferGeometry
+function panelGeometry(faceU, faceV, clipped, pegboard, thickness) {
+  const key = `${faceU},${faceV},${clipped},${pegboard},${thickness}`;
+  let geom = panelGeomCache.get(key);
+  if (geom) return geom;
+  const shape = panelShape(faceU, faceV, clipped);
+  if (pegboard) addPegHoles(shape, faceU, faceV);
+  geom = new THREE.ExtrudeGeometry(shape, { depth: thickness, bevelEnabled: false, curveSegments: 8 });
+  panelGeomCache.set(key, geom);
+  return geom;
+}
 
 function panelShape(w, h, clipped) {
   const s = new THREE.Shape();
@@ -38,20 +120,24 @@ export function buildPanelMesh(o, clippedCorners = false) {
   group.userData.id = o.id;
   group.userData.type = "panel";
 
-  const t = PANEL_THICK;
+  const t = panelThickness(o.material);
+  const { mat, pegboard: isPegboard } = configFor(o.material);
+  // Pegboard always needs the extruded shape (to punch real holes through);
+  // plain panels only extrude when clipped corners are on and dims allow it.
+  const extrude = isPegboard || (clippedCorners && o.w >= 0.5 && o.h >= 0.5);
 
-  // Fall back to simple box if dimensions are too small for a valid extrusion.
-  if (!clippedCorners || o.w < 0.5 || o.h < 0.5) {
+  if (!extrude) {
     // Simple box — no shape extrusion needed.
     const dims = o.normal === "x" ? [t, o.w, o.h]
                : o.normal === "y" ? [o.w, t, o.h]
                : [o.w, o.h, t];
-    const mesh = new THREE.Mesh(new THREE.BoxGeometry(...dims), panelMat);
+    const mesh = new THREE.Mesh(new THREE.BoxGeometry(...dims), mat);
     mesh.position.set(dims[0] / 2, dims[1] / 2, dims[2] / 2);
     mesh.userData.id = o.id;
     group.add(mesh);
   } else {
-    // Extruded octagon — 3/4" triangle removed from each corner.
+    // Extruded shape — optionally an octagon (3/4" triangle removed from
+    // each corner) and/or a peg-hole grid, both punched all the way through.
     // Shape is always drawn in its own XY with u=o.w, v=o.h.
     // ExtrudeGeometry extrudes along local +Z by thickness t.
     // Then rotate+position so the extrusion runs along the normal axis and
@@ -71,9 +157,8 @@ export function buildPanelMesh(o, clippedCorners = false) {
       faceU = o.w; faceV = o.h;
     }
 
-    const shape = panelShape(faceU, faceV, true);
-    const geom = new THREE.ExtrudeGeometry(shape, { depth: t, bevelEnabled: false });
-    const mesh = new THREE.Mesh(geom, panelMat);
+    const geom = panelGeometry(faceU, faceV, clippedCorners, isPegboard, t);
+    const mesh = new THREE.Mesh(geom, mat);
     mesh.userData.id = o.id;
 
     if (o.normal === "z") {

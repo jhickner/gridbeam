@@ -1,5 +1,5 @@
 // Infer bolt locations from proximity. Beams don't intersect; they sit face-to-face.
-import { BEAM_SIZE, PANEL_THICK, SNAP } from "./grid.js";
+import { BEAM_SIZE, panelThickness, SNAP } from "./grid.js";
 import { beamHoleWorldPositions } from "./beam.js";
 
 const EPS = 1e-3;
@@ -13,7 +13,7 @@ function beamAabb(o) {
 }
 
 function panelAabb(o) {
-  const t = PANEL_THICK;
+  const t = panelThickness(o.material);
   const d = o.normal === "x" ? [t, o.w, o.h]
           : o.normal === "y" ? [o.w, t, o.h]
           : [o.w, o.h, t];
@@ -26,8 +26,8 @@ function panelAabb(o) {
 // actual bolt direction (the two beams' touching face).
 const AXIS_LETTER = ["x", "y", "z"];
 export function computeConnections(doc) {
-  // Skip rotated objects — bolts only make sense for grid-aligned beams.
-  const beams = doc.objects.filter((o) => o.type === "beam" && !o.groupRotY);
+  // Skip rotated/tilted objects — bolts only make sense for grid-aligned beams.
+  const beams = doc.objects.filter((o) => o.type === "beam" && !o.groupRotY && !o.tilt);
   const panels = doc.objects.filter((o) => o.type === "panel" && !o.groupRotY);
   const bolts = [];
   const boltedHoles = new Map();
@@ -149,6 +149,48 @@ export function computeConnections(doc) {
             markHole(B.id, bi, axisLetter);
           }
         }
+      }
+    }
+  }
+
+  // --- Angled / peak joints ---
+  // Tilted beams (rafters) are off the lattice, so the grid loop skips them.
+  // Handle their two joints explicitly:
+  //   • Peak — the two offset rafters bolt through their overlapping ends. Put
+  //     one bolt at the midpoint of the two apex points (the touching face).
+  //   • Feet — a rafter's foot bolts to whatever beam it rests on. Put a bolt at
+  //     the foot when it sits within a beam-width of another (untilted) beam.
+  // Through-bolt travels perpendicular to the rafter's tilt plane.
+  const perpDir = (o) => (o.axis === "x" ? "z" : o.axis === "z" ? "x" : "y");
+
+  const seenPeak = new Set();
+  for (const o of doc.objects) {
+    if (!o.peak || seenPeak.has(o.peak)) continue;
+    const rafters = doc.objects.filter((r) => r.peak === o.peak && r.apex);
+    if (rafters.length !== 2) continue;
+    seenPeak.add(o.peak);
+    const [p, q] = rafters.map((r) => r.apex);
+    addBolt([(p[0]+q[0])/2, (p[1]+q[1])/2, (p[2]+q[2])/2], "beam-beam");
+  }
+
+  // Feet: bolt where a rafter's foot rests on/into an untilted beam. The bolt
+  // sits at the rafter's foot HOLE (HOLE_INSET in from the tip), not the bare
+  // end — that's where a real bolt would pass through.
+  const supports = doc.objects.filter((o) => o.type === "beam" && !o.groupRotY && !o.tilt);
+  const m = BEAM_SIZE / 2; // "resting" tolerance — a foot within half a beam of the support
+  for (const o of doc.objects) {
+    if (!o.peak || !o.footC) continue;
+    const fc = o.footC; // physical foot centerline (grid+0.75 lattice)
+    for (const s of supports) {
+      const [mn, mx] = beamAabb(s);
+      if (fc[0] >= mn[0]-m && fc[0] <= mx[0]+m &&
+          fc[1] >= mn[1]-m && fc[1] <= mx[1]+m &&
+          fc[2] >= mn[2]-m && fc[2] <= mx[2]+m) {
+        const holes = beamHoleWorldPositions(o);
+        const fi = (o.tilt || 0) >= 0 ? 0 : holes.length - 1; // hole nearest the foot
+        addBolt(holes[fi], "beam-beam");
+        markHole(o.id, fi, perpDir(o));
+        break;
       }
     }
   }
