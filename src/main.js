@@ -16,7 +16,10 @@ import { FIXTURES, buildFixtureMesh, fixtureLabel } from "./fixtures.js";
 import { buildBookMesh } from "./books.js";
 import { computeConnections } from "./connections.js";
 import { computeBom } from "./bom.js";
-import { initAutosave, downloadJson, loadFromFile } from "./io.js";
+import { initAutosave } from "./io.js";
+import { initProjectsDropdown } from "./ui/projects.js";
+import { showConfirm, showToast, isDialogOpen } from "./ui/dialog.js";
+import { openImportGallery, isImportGalleryOpen } from "./ui/importGallery.js";
 import { openExportView } from "./exportView.js";
 
 // Panel material labels — shared by the sidebar's material switcher, the
@@ -441,6 +444,15 @@ subscribe((doc, hint) => {
     if (hint === "pos") updateMeshPositions(doc);
     else rebuildMeshes(doc);
   } catch (e) { console.error("rebuildMeshes failed:", e); }
+
+  // Drop selections pointing at objects the document no longer has (project
+  // switch, import, undo past a create).
+  if (hint !== "pos" && selectedIds.size) {
+    const live = new Set(doc.objects.map((o) => o.id));
+    let dropped = false;
+    for (const id of [...selectedIds]) if (!live.has(id)) { selectedIds.delete(id); dropped = true; }
+    if (dropped) { refreshOutlines(); refreshSidebar(); }
+  }
 });
 
 // ------- Picking & dragging -------
@@ -858,6 +870,7 @@ function canMoveSelY(dy) {
 window.addEventListener("keydown", (e) => {
   const tag = (e.target && e.target.tagName) || "";
   if (tag === "INPUT" || tag === "SELECT" || tag === "TEXTAREA") return;
+  if (isDialogOpen() || isImportGalleryOpen()) return;
 
   // Undo/redo.
   if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "z") {
@@ -1314,24 +1327,26 @@ btnSelect.onclick = () => { interactionMode = "select"; localStorage.setItem("gr
 
 document.getElementById("btn-undo").onclick = undo;
 document.getElementById("btn-redo").onclick = redo;
-document.getElementById("btn-save").onclick = downloadJson;
+initProjectsDropdown({
+  button: document.getElementById("btn-projects"),
+  nameEl: document.getElementById("project-name"),
+  onImport: () => openImportGallery({ pickImmediately: true }),
+});
 
-const fileInput = document.getElementById("file-load");
-document.getElementById("btn-load").onclick = () => fileInput.click();
-fileInput.onchange = async () => {
-  if (fileInput.files[0]) {
-    await loadFromFile(fileInput.files[0]);
-    fileInput.value = "";
-  }
-};
+document.getElementById("btn-import").onclick = () => openImportGallery();
 
 document.getElementById("btn-export").onclick = () => {
   renderer.render(scene, camera);
   const data = renderer.domElement.toDataURL("image/png");
   openExportView(getDoc(), data, { minimalMode });
 };
-document.getElementById("btn-clear").onclick = () => {
-  if (confirm("Clear all objects?")) { clearAll(); selectedIds.clear(); }
+document.getElementById("btn-clear").onclick = async () => {
+  const ok = await showConfirm({
+    title: "Clear",
+    message: "Remove all objects from this project?",
+    confirmLabel: "Clear", danger: true,
+  });
+  if (ok) { clearAll(); selectedIds.clear(); }
 };
 
 const btnMinimal = document.getElementById("btn-minimal");
