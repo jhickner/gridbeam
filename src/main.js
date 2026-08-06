@@ -299,7 +299,6 @@ function rebuildMeshes(doc) {
   cachedConnections = computeConnections(doc);
   const { bolts, boltedHoles } = cachedConnections;
 
-  // Dispose old geometries before removing.
   for (const [, g] of meshById) { disposeGroup(g); root.remove(g); }
   meshById.clear();
   for (const [, w] of rotGroupWrappers) { root.remove(w); }
@@ -355,7 +354,6 @@ function rebuildMeshes(doc) {
     meshById.set(o.id, g);
   }
 
-  // Dispose old bolt geometries.
   boltsGroup.traverse((child) => { if (child.geometry) child.geometry.dispose(); });
   boltsGroup.clear();
   for (const c of bolts) {

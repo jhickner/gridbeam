@@ -25,9 +25,9 @@ const nameValidator = (skip) => (v) => {
   return null;
 };
 
-// The panel is a self-contained element: mount it in a dropdown on desktop or a
-// bottom sheet on mobile. The host calls setVisible() so autosave-driven
-// refreshes don't rebuild markup nobody is looking at.
+// The panel is a self-contained element the host mounts wherever it likes.
+// The host must call setVisible(), so autosave-driven refreshes (which fire
+// every 200ms while editing) don't rebuild markup nobody is looking at.
 export function createProjectsPanel({ onImport, visible = true } = {}) {
   const el = document.createElement("div");
   el.className = "gb-projects";

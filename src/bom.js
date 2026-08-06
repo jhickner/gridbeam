@@ -121,7 +121,6 @@ export const SHEET_PRICES = {
   "pegboard-black-aluminum": 84.99,
   wood: 68,
 };
-export const SHEET_PRICE = SHEET_PRICES.plywood; // back-compat default
 
 // Expand panelRows into individual rectangles, keeping material so callers
 // can pack/price each material's sheets separately.
