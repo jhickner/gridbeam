@@ -50,14 +50,12 @@ export function computeBom(doc, { minimalMode = false, connections = null } = {}
   }
   const panelRows = Object.values(panelList).sort((a, b) => b.w * b.h - a.w * a.h);
 
+  // One bolt and one cap per joint, and nothing else — panels are captured by
+  // the same joint bolts rather than screwed on separately.
   const nConn = bolts.length;
-  const nScrews = panels.length * 4; // one screw per corner
   const hardware = [
-    { item: "Bolt (1/4\"-20, user length)", qty: nConn },
-    { item: "Flat washer", qty: nConn },
-    { item: "Lock washer", qty: nConn },
-    { item: "Hex nut", qty: nConn },
-    { item: "Wood screw (panels)", qty: nScrews },
+    { item: "Bolt", qty: nConn },
+    { item: "Cap", qty: nConn },
   ];
 
   // Minimal-mode drilling instructions: grouped by beam length and hole
