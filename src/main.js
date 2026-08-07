@@ -251,6 +251,75 @@ function updateBeamHeightLabels() {
   }
 }
 
+// ------- Pair measurement -------
+// With exactly two objects selected, report how far apart they are. Two
+// different numbers matter when building: center-to-center spacing (where the
+// bolts land) and the clear gap (what actually fits between them). A negative
+// gap means the two overlap on that axis.
+function pairMeasure(a, b) {
+  const [amn, amx] = bbox(a);
+  const [bmn, bmx] = bbox(b);
+  const center = [], gap = [];
+  for (let i = 0; i < 3; i++) {
+    const ac = (amn[i] + amx[i]) / 2;
+    const bc = (bmn[i] + bmx[i]) / 2;
+    center.push(Math.abs(bc - ac));
+    gap.push(Math.max(bmn[i] - amx[i], amn[i] - bmx[i]));
+  }
+  const mid = [0, 1, 2].map((i) => ((amn[i] + amx[i]) / 2 + (bmn[i] + bmx[i]) / 2) / 2);
+  const distance = Math.hypot(center[0], center[1], center[2]);
+  return { center, gap, mid, distance };
+}
+
+function selectedPair() {
+  if (selectedIds.size !== 2) return null;
+  const [ia, ib] = [...selectedIds];
+  const a = getObject(ia), b = getObject(ib);
+  return a && b ? [a, b] : null;
+}
+
+const measureLabelEl = document.getElementById("measure-label");
+const measureGroup = new THREE.Group();
+scene.add(measureGroup);
+const measureMat = new THREE.LineBasicMaterial({ color: 0xffa640, depthTest: false, transparent: true });
+const measureGeom = new THREE.BufferGeometry().setAttribute(
+  "position", new THREE.BufferAttribute(new Float32Array(6), 3)
+);
+const measureLine = new THREE.Line(measureGeom, measureMat);
+measureLine.renderOrder = 999; // draw over the beams rather than inside them
+measureGroup.add(measureLine);
+measureGroup.visible = false;
+
+function updateMeasurement() {
+  const pair = selectedPair();
+  if (!pair) {
+    measureGroup.visible = false;
+    measureLabelEl.style.display = "none";
+    return;
+  }
+  const [a, b] = pair;
+  const [amn, amx] = bbox(a);
+  const [bmn, bmx] = bbox(b);
+  const ca = [0, 1, 2].map((i) => (amn[i] + amx[i]) / 2);
+  const cb = [0, 1, 2].map((i) => (bmn[i] + bmx[i]) / 2);
+
+  const pos = measureGeom.attributes.position;
+  pos.setXYZ(0, ca[0], ca[1], ca[2]);
+  pos.setXYZ(1, cb[0], cb[1], cb[2]);
+  pos.needsUpdate = true;
+  measureGeom.computeBoundingSphere();
+  measureGroup.visible = true;
+
+  const m = pairMeasure(a, b);
+  const s = worldToScreen(m.mid[0], m.mid[1], m.mid[2]);
+  if (s.behind) { measureLabelEl.style.display = "none"; return; }
+  measureLabelEl.style.display = "block";
+  measureLabelEl.style.left = s.x + "px";
+  measureLabelEl.style.top = s.y + "px";
+  measureLabelEl.textContent =
+    `W ${fmtIn(m.center[0])} · D ${fmtIn(m.center[2])} · H ${fmtIn(m.center[1])}`;
+}
+
 // ------- Multi-selection -------
 const selectedIds = new Set();
 // One Box3Helper per selected object; rebuilt when selection changes.
@@ -1106,6 +1175,33 @@ function refreshSidebar() {
     for (const id of selectedIds) { const o = getObject(id); if (o && o.group) groups.add(o.group); }
     const isGrouped = groups.size === 1 && selectedIds.size === groupMembers([...selectedIds][0]).length;
 
+    // Exactly two objects: how far apart they are, on each axis.
+    let pairInfo = "";
+    const pair = selectedPair();
+    if (pair) {
+      const m = pairMeasure(pair[0], pair[1]);
+      const row = (label, v) => `
+        <tr><td style="color:#aaa;">${label}</td>
+            <td style="text-align:right;font-family:ui-monospace,Menlo,monospace;">${fmtIn(Math.abs(v))}</td>
+            <td style="color:#666;padding-left:6px;">${v < -0.001 ? "overlap" : ""}</td></tr>`;
+      pairInfo = `
+        <div style="margin-top:8px;">
+          <div style="color:#aaa;font-size:11px;">Offset — center to center</div>
+          <table style="width:100%;font-size:11px;border-collapse:collapse;">
+            ${row("Width (X)", m.center[0])}
+            ${row("Depth (Z)", m.center[2])}
+            ${row("Height (Y)", m.center[1])}
+            ${row("Distance", m.distance)}
+          </table>
+          <div style="color:#aaa;font-size:11px;margin-top:6px;">Clear gap between</div>
+          <table style="width:100%;font-size:11px;border-collapse:collapse;">
+            ${row("Width (X)", m.gap[0])}
+            ${row("Depth (Z)", m.gap[2])}
+            ${row("Height (Y)", m.gap[1])}
+          </table>
+        </div>`;
+    }
+
     const rotAngle = isGrouped ? getGroupRotation([...selectedIds][0]) : 0;
     const rotInfo = rotAngle
       ? `<div style="margin-top:6px;">
@@ -1119,6 +1215,7 @@ function refreshSidebar() {
         ${isGrouped ? '<span style="color:#4acfff;font-size:11px;"> (grouped)</span>' : ""}
       </div>
       ${rotInfo}
+      ${pairInfo}
       <div style="margin-top:6px;">
         <div style="color:#aaa;font-size:11px;">Extent W × D × H</div>
         <div style="font-family:ui-monospace,Menlo,monospace;">
@@ -1432,6 +1529,7 @@ function tick() {
     if (g) helper.box.setFromObject(g);
   }
   updateBeamHeightLabels();
+  updateMeasurement();
   renderer.render(scene, camera);
 }
 tick();

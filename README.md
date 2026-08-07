@@ -21,6 +21,8 @@ Everything is in inches and snapped to the 1.5" grid.
 - Minimal-hole mode: drill only the holes a joint actually needs, with
   per-beam drilling instructions measured from each end
 - Grouping, group rotation about Y, multi-select, marquee select, undo/redo
+- Select exactly two objects to measure between them — center-to-center offset
+  and clear gap on each axis, shown in the sidebar and on the model
 - Build plan export: beam cut list, 1D stock packing, 2D guillotine packing of
   panels onto 4'×8' sheets with SVG cut diagrams, hardware count and cost
 - Named projects stored in the browser, with whole-store backup and restore

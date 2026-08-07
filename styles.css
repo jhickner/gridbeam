@@ -282,6 +282,14 @@ dialog.gb-dialog::backdrop { background: rgba(0,0,0,0.5); }
 #back-link { color: #4acfff; text-decoration: none; margin-left: auto; }
 #back-link:hover { text-decoration: underline; }
 
+#measure-label {
+  position: absolute; z-index: 11; display: none;
+  transform: translate(-50%, -50%);
+  background: rgba(0,0,0,0.78); color: #ffa640; padding: 2px 6px;
+  border-radius: 3px; font-size: 10px; font-family: ui-monospace, Menlo, monospace;
+  white-space: nowrap; pointer-events: none;
+}
+
 #marquee {
   position: absolute; pointer-events: none; z-index: 10;
   border: 2px dashed #00e5ff;
