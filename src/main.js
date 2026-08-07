@@ -939,6 +939,13 @@ window.addEventListener("keydown", (e) => {
     return;
   }
 
+  // Everything below is an unmodified-key shortcut, so bail when a modifier is
+  // held — otherwise the single-letter keys shadow browser/OS chords that share
+  // the letter (Cmd+R reload, Cmd+S save, Cmd+T new tab all fired the editor's
+  // R/S/T as well). Shift stays allowed: Shift+T, Shift+Tab and Shift+arrow are
+  // real bindings.
+  if (e.metaKey || e.ctrlKey || e.altKey) return;
+
   if (!hasSel()) return;
 
   if (e.key === "Delete" || e.key === "Backspace") {
