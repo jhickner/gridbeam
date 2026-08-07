@@ -30,6 +30,13 @@ const LAPTOP_TILT = THREE.MathUtils.degToRad(12); // lean past vertical
 const LAPTOP_TOTAL_H = LAPTOP_BASE_H + LAPTOP_SCREEN_H * Math.cos(LAPTOP_TILT);
 const LAPTOP_TOTAL_DEPTH = LAPTOP_BASE_DEPTH + LAPTOP_SCREEN_H * Math.sin(LAPTOP_TILT);
 
+const HDX_BODY = 0x1b1b1d;
+const HDX_LID = 0xf5c518;
+// Lid depth as a fraction of overall height — the snap-on lid is a shallow cap,
+// and the ratio holds well enough across the size range to avoid a per-size
+// constant.
+const HDX_LID_FRACTION = 0.09;
+
 export const FIXTURES = {
   "crib-mattress": {
     label: "Crib Mattress",
@@ -47,6 +54,29 @@ export const FIXTURES = {
     label: '13" MacBook Pro (open)',
     dims: [LAPTOP_TOTAL_DEPTH, LAPTOP_TOTAL_H, LAPTOP_WIDTH], // opened AABB
     color: 0xaeb0b4,
+  },
+
+  // HDX Tough Storage Totes — black body, yellow snap-on lid. Manufacturer
+  // exterior dimensions measured at the top of the tote; the real totes taper
+  // inward toward the base so they nest, which is not modeled. The top is the
+  // widest point, so a straight box is the correct clearance envelope.
+  "hdx-27gal": {
+    label: "HDX Tote 27 gal",
+    dims: [19.6, 15.2, 28.6],
+    color: HDX_BODY,
+    lid: true,
+  },
+  "hdx-7gal": {
+    label: "HDX Tote 7 gal",
+    dims: [13.4, 10.6, 18.8],
+    color: HDX_BODY,
+    lid: true,
+  },
+  "hdx-6.5qt": {
+    label: "HDX Tote 6.5 qt",
+    dims: [8.1, 6.2, 12.9],
+    color: HDX_BODY,
+    lid: true,
   },
 };
 
@@ -109,6 +139,34 @@ function buildMacbookAssembly(id) {
   return asm;
 }
 
+const hdxLidMat = new THREE.MeshStandardMaterial({ color: HDX_LID, roughness: 0.75 });
+
+// Black body with a yellow lid capping the top. The lid overhangs the rim
+// slightly, as the real snap-on lid does, but stays inside the published
+// exterior dimensions so the fixture's AABB still matches the spec.
+function buildToteAssembly(o, dims) {
+  const [dx, dy, dz] = dims;
+  const asm = new THREE.Group();
+  const lidH = dy * HDX_LID_FRACTION;
+  const bodyH = dy - lidH;
+  const inset = Math.min(dx, dz) * 0.02;
+
+  const body = new THREE.Mesh(
+    new THREE.BoxGeometry(dx - inset * 2, bodyH, dz - inset * 2),
+    materialFor(o.kind)
+  );
+  body.position.set(dx / 2, bodyH / 2, dz / 2);
+  body.userData.id = o.id;
+  asm.add(body);
+
+  const lid = new THREE.Mesh(new THREE.BoxGeometry(dx, lidH, dz), hdxLidMat);
+  lid.position.set(dx / 2, bodyH + lidH / 2, dz / 2);
+  lid.userData.id = o.id;
+  asm.add(lid);
+
+  return asm;
+}
+
 export function buildFixtureMesh(o) {
   const group = new THREE.Group();
   group.userData.id = o.id;
@@ -133,6 +191,13 @@ export function buildFixtureMesh(o) {
   }
 
   const dims = fixtureDims(o.kind, o.axis);
+
+  if (FIXTURES[o.kind] && FIXTURES[o.kind].lid) {
+    group.add(buildToteAssembly(o, dims));
+    group.position.set(o.pos[0], o.pos[1], o.pos[2]);
+    return group;
+  }
+
   const mesh = new THREE.Mesh(new THREE.BoxGeometry(...dims), materialFor(o.kind));
   mesh.position.set(dims[0] / 2, dims[1] / 2, dims[2] / 2);
   mesh.userData.id = o.id;

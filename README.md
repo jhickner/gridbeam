@@ -14,7 +14,8 @@ Everything is in inches and snapped to the 1.5" grid.
 - Panels in five materials: plywood, hardboard pegboard, aluminium pegboard,
   black aluminium pegboard, and wood
 - Pegboard holes and clipped corners modelled in the actual geometry
-- Fixtures for scale: crib mattress, single mattress, open 13" MacBook Pro
+- Fixtures for scale: crib mattress, single mattress, open 13" MacBook Pro, and
+  HDX tough totes in 27 gal, 7 gal and 6.5 qt at their published exterior sizes
 - Procedurally generated book rows for shelving
 - Bolted connections inferred automatically from hole alignment — no manual
   joining
