@@ -36,6 +36,9 @@ const HDX_LID = 0xf5c518;
 // and the ratio holds well enough across the size range to avoid a per-size
 // constant.
 const HDX_LID_FRACTION = 0.09;
+// How far the lid's skirt hangs past the body, per side. A physical lip, so
+// it stays constant across the size range rather than scaling with the tote.
+const HDX_LID_OVERHANG = 0.15;
 
 export const FIXTURES = {
   "crib-mattress": {
@@ -63,22 +66,33 @@ export const FIXTURES = {
   "hdx-27gal": {
     label: "HDX Tote 27 gal",
     dims: [19.6, 15.2, 28.6],
+    base: [14.3, 23.3],
     color: HDX_BODY,
     lid: true,
   },
   "hdx-7gal": {
     label: "HDX Tote 7 gal",
     dims: [13.4, 10.6, 18.8],
+    base: [8.2, 14.3],
     color: HDX_BODY,
     lid: true,
   },
   "hdx-6.5qt": {
     label: "HDX Tote 6.5 qt",
     dims: [8.1, 6.2, 12.9],
+    base: [5.8, 9.8],
     color: HDX_BODY,
     lid: true,
   },
 };
+
+// Footprint at the base, in the same [dx, dz] convention as fixtureDims.
+function fixtureBase(kind, axis) {
+  const f = FIXTURES[kind];
+  if (!f || !f.base) return null;
+  const [w, l] = f.base;
+  return axis === "x" ? [l, w] : [w, l];
+}
 
 // Given a fixture's dimensions and the requested long-axis direction,
 // compute the world-space [dx, dy, dz] extents. `axis` is "x" or "z".
@@ -141,18 +155,40 @@ function buildMacbookAssembly(id) {
 
 const hdxLidMat = new THREE.MeshStandardMaterial({ color: HDX_LID, roughness: 0.75 });
 
-// Black body with a yellow lid capping the top. The lid overhangs the rim
-// slightly, as the real snap-on lid does, but stays inside the published
-// exterior dimensions so the fixture's AABB still matches the spec.
+// A box whose bottom face is smaller than its top, for the nesting taper.
+// Built by displacing BoxGeometry's own vertices — each side face has vertices
+// only at the two extremes in Y, so scaling them by height gives an exact
+// linear taper while keeping the box's winding, and its one-quad-per-face
+// topology keeps the recomputed normals flat.
+function taperedBoxGeometry(topX, topZ, botX, botZ, height) {
+  const g = new THREE.BoxGeometry(topX, height, topZ);
+  const pos = g.attributes.position;
+  for (let i = 0; i < pos.count; i++) {
+    const t = (pos.getY(i) + height / 2) / height; // 0 at the base, 1 at the rim
+    pos.setX(i, pos.getX(i) * THREE.MathUtils.lerp(botX / topX, 1, t));
+    pos.setZ(i, pos.getZ(i) * THREE.MathUtils.lerp(botZ / topZ, 1, t));
+  }
+  pos.needsUpdate = true;
+  g.computeVertexNormals();
+  return g;
+}
+
+// Black body tapering in toward the base (so the real totes nest), with a
+// yellow lid capping the top. The lid overhangs the rim slightly, as the real
+// snap-on lid does, but stays inside the published exterior dimensions so the
+// fixture's AABB still matches the spec — the rim is the widest point.
 function buildToteAssembly(o, dims) {
   const [dx, dy, dz] = dims;
   const asm = new THREE.Group();
   const lidH = dy * HDX_LID_FRACTION;
   const bodyH = dy - lidH;
-  const inset = Math.min(dx, dz) * 0.02;
+  const topX = dx - HDX_LID_OVERHANG * 2, topZ = dz - HDX_LID_OVERHANG * 2;
+  const base = fixtureBase(o.kind, o.axis);
 
   const body = new THREE.Mesh(
-    new THREE.BoxGeometry(dx - inset * 2, bodyH, dz - inset * 2),
+    base
+      ? taperedBoxGeometry(topX, topZ, base[0], base[1], bodyH)
+      : new THREE.BoxGeometry(topX, bodyH, topZ),
     materialFor(o.kind)
   );
   body.position.set(dx / 2, bodyH / 2, dz / 2);
