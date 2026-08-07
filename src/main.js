@@ -16,7 +16,7 @@ import { FIXTURES, buildFixtureMesh, fixtureLabel } from "./fixtures.js";
 import { buildBookMesh } from "./books.js";
 import { computeConnections } from "./connections.js";
 import { computeBom } from "./bom.js";
-import { initAutosave } from "./io.js";
+import { initAutosave, currentProjectName } from "./io.js";
 import { initProjectsDropdown } from "./ui/projects.js";
 import { showConfirm, showToast, isDialogOpen } from "./ui/dialog.js";
 import { openImportGallery, isImportGalleryOpen } from "./ui/importGallery.js";
@@ -1440,7 +1440,7 @@ document.getElementById("btn-import").onclick = () => openImportGallery();
 document.getElementById("btn-export").onclick = () => {
   renderer.render(scene, camera);
   const data = renderer.domElement.toDataURL("image/png");
-  openExportView(getDoc(), data, { minimalMode });
+  openExportView(getDoc(), data, { minimalMode, title: currentProjectName() });
 };
 document.getElementById("btn-clear").onclick = async () => {
   const ok = await showConfirm({

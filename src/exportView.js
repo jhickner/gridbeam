@@ -1,7 +1,11 @@
 import { computeBom, expandCuts, expandPanels, groupPanelsByMaterial, packPanelSheets, SHEET_PRICES } from "./bom.js";
 import { fmtIn } from "./grid.js";
 
-export function openExportView(doc, screenshotDataUrl, { minimalMode = false } = {}) {
+const ESCAPES = { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" };
+const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ESCAPES[c]);
+
+export function openExportView(doc, screenshotDataUrl, { minimalMode = false, title = "" } = {}) {
+  const planTitle = title.trim() || "Grid Beam Construction Plan";
   const { cutRows, panelRows, hardware, nConn, drillingRows } = computeBom(doc, { minimalMode });
 
   const cutHtml = cutRows.length
@@ -126,7 +130,7 @@ export function openExportView(doc, screenshotDataUrl, { minimalMode = false } =
   }
 
   const html = `<!doctype html>
-<html><head><meta charset="utf-8"><title>Grid Beam Plan</title>
+<html><head><meta charset="utf-8"><title>${esc(planTitle)}</title>
 <style>
   :root { color-scheme: dark; }
   body { font-family: -apple-system, system-ui, sans-serif; max-width: 820px; margin: 24px auto; padding: 0 16px;
@@ -160,7 +164,7 @@ export function openExportView(doc, screenshotDataUrl, { minimalMode = false } =
   }
 </style></head>
 <body>
-  <h1>Grid Beam Construction Plan</h1>
+  <h1>${esc(planTitle)}</h1>
   <div class="meta">Generated ${new Date().toLocaleString()}
     <button class="no-print" onclick="window.print()">Print</button></div>
 
