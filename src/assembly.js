@@ -135,17 +135,17 @@ export function buildAssembly(doc, connections = null) {
       const to = entry.joinedTo.map((j) => `<b>${j.key}</b> (${j.bolts} bolt${j.bolts === 1 ? "" : "s"})`).join(", ");
       action = `${noun} <b>${part.key}</b> — ${part.detail} — at ${at(part.obj.pos)}. Bolt to ${to}.`;
     }
-    steps.push({ key: part.key, bolts: entry.bolts, html: action });
+    steps.push({ id: entry.id, key: part.key, bolts: entry.bolts, html: action });
   });
 
   // Panels and fixtures go on once the frame stands.
   const panelSteps = [...panels].sort(byHeight).map((o) => {
     const part = parts.get(o.id);
-    return { key: part.key, bolts: 0,
+    return { id: o.id, key: part.key, bolts: 0,
       html: `Fit <b>${part.key}</b> — ${part.detail} — at ${at(o.pos)}.` };
   });
   const extraSteps = [...extras].sort(byHeight).map((o) => ({
-    key: "", bolts: 0,
+    id: o.id, key: "", bolts: 0,
     html: `Place ${fixtureLabel(o.kind)} at ${at(o.pos)}. <em>Not part of the build — shown for fit.</em>`,
   }));
 

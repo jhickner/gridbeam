@@ -21,6 +21,8 @@ import { initProjectsDropdown } from "./ui/projects.js";
 import { showConfirm, showToast, isDialogOpen } from "./ui/dialog.js";
 import { openImportGallery, isImportGalleryOpen } from "./ui/importGallery.js";
 import { openExportView } from "./exportView.js";
+import { buildAssembly } from "./assembly.js";
+import { renderAssemblySteps } from "./stepImages.js";
 
 // Panel material labels — shared by the sidebar's material switcher, the
 // BOM/summary suffixes, and the Add-type dropdown values ("panel:<key>").
@@ -1437,10 +1439,33 @@ initProjectsDropdown({
 
 document.getElementById("btn-import").onclick = () => openImportGallery();
 
-document.getElementById("btn-export").onclick = () => {
+document.getElementById("btn-export").onclick = async () => {
   renderer.render(scene, camera);
   const data = renderer.domElement.toDataURL("image/png");
-  openExportView(getDoc(), data, { minimalMode, title: currentProjectName() });
+  const doc = getDoc();
+  const assembly = buildAssembly(doc);
+  const stepIds = [...assembly.frameSteps, ...assembly.panelSteps, ...assembly.extraSteps]
+    .map((s) => s.id);
+
+  // Claim the window inside the click, before any await — otherwise the popup
+  // blocker rejects it.
+  const win = window.open("", "_blank");
+  if (win) {
+    win.document.write(
+      `<body style="background:#1a1a1a;color:#888;font:13px -apple-system,system-ui,sans-serif;padding:24px">
+         Building the construction plan…</body>`
+    );
+  }
+
+  const stepImages = await renderAssemblySteps(doc, stepIds, {
+    onProgress: (n, total) => {
+      if (total > 20) showToast(`Drawing assembly steps… ${n}/${total}`);
+    },
+  });
+
+  openExportView(doc, data, {
+    minimalMode, title: currentProjectName(), assembly, stepImages, win,
+  });
 };
 document.getElementById("btn-clear").onclick = async () => {
   const ok = await showConfirm({

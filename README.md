@@ -26,8 +26,9 @@ Everything is in inches and snapped to the 1.5" grid.
   and clear gap on each axis, shown in the sidebar and on the model
 - Build plan export: beam cut list, 1D stock packing, 2D guillotine packing of
   panels onto 4'×8' sheets with SVG cut diagrams, hardware count and cost
-- Construction plan: a numbered assembly order derived from the bolted
-  connections, adding each part to something already standing, ground up
+- Construction plan: a numbered, illustrated assembly order derived from the
+  bolted connections — one rendered diagram per step showing the piece so far
+  with the part being added highlighted, on a fixed camera
 - Named projects stored in the browser, with whole-store backup and restore
 - Import gallery: preview any number of saved JSON files as 3D thumbnails
   before choosing which to import

@@ -42,7 +42,7 @@ const buildMesh = (o) =>
   : o.type === "book" ? buildBookMesh(o)
   : buildPanelMesh(o, false);
 
-function buildRoot(doc) {
+export function buildRoot(doc, meshById = null) {
   const root = new THREE.Group();
 
   const rotGroups = new Map();
@@ -65,13 +65,17 @@ function buildRoot(doc) {
       const bp = meshBasePos(o);
       g.position.set(bp[0] - rg.pivot[0], bp[1], bp[2] - rg.pivot[1]);
       wrapper.add(g);
+      if (meshById) meshById.set(o.id, g);
       rotated.add(o.id);
     }
     root.add(wrapper);
   }
 
   for (const o of doc.objects) {
-    if (!rotated.has(o.id)) root.add(buildMesh(o));
+    if (rotated.has(o.id)) continue;
+    const g = buildMesh(o);
+    root.add(g);
+    if (meshById) meshById.set(o.id, g);
   }
   return root;
 }
@@ -83,7 +87,7 @@ function disposeGroup(g) {
   });
 }
 
-function addLights(scene) {
+export function addLights(scene) {
   scene.add(new THREE.HemisphereLight(0xffffff, 0x222222, 0.75));
   const d = new THREE.DirectionalLight(0xffffff, 0.85);
   d.position.set(40, 80, 30);
@@ -91,7 +95,7 @@ function addLights(scene) {
 }
 
 // Frame the camera on a bounding box from a fixed three-quarter angle.
-function frame(camera, box, aspect, pad = 1.25) {
+export function frame(camera, box, aspect, pad = 1.25) {
   const size = box.getSize(new THREE.Vector3());
   const center = box.getCenter(new THREE.Vector3());
   const radius = Math.max(size.length() / 2, 1);

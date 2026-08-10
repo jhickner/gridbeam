@@ -5,7 +5,9 @@ import { buildAssembly } from "./assembly.js";
 const ESCAPES = { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" };
 const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ESCAPES[c]);
 
-export function openExportView(doc, screenshotDataUrl, { minimalMode = false, title = "" } = {}) {
+export function openExportView(doc, screenshotDataUrl, {
+  minimalMode = false, title = "", assembly = null, stepImages = null, win = null,
+} = {}) {
   const planTitle = title.trim() || "Grid Beam Construction Plan";
   const { cutRows, panelRows, hardware, nConn, drillingRows } = computeBom(doc, { minimalMode });
 
@@ -131,10 +133,19 @@ export function openExportView(doc, screenshotDataUrl, { minimalMode = false, ti
   }
 
   // ---- Construction plan ----
-  const asm = buildAssembly(doc);
+  const asm = assembly || buildAssembly(doc);
+  // Images arrive in the same order the steps are emitted, so one running
+  // index walks all three step lists.
+  const imagesByIndex = stepImages || [];
+  let imgCursor = 0;
   const stepList = (steps, startAt) =>
     `<ol class="steps" start="${startAt}">` +
-    steps.map((s) => `<li>${s.html}</li>`).join("") +
+    steps.map((s, i) => {
+      const img = imagesByIndex[imgCursor++];
+      return `<li><div class="step-n">${startAt + i}</div>
+                ${img ? `<img class="step-img" src="${img}" alt="">` : ""}
+                <div class="step-text">${s.html}</div></li>`;
+    }).join("") +
     `</ol>`;
 
   const partsKeyHtml = asm.parts.length
@@ -187,10 +198,21 @@ export function openExportView(doc, screenshotDataUrl, { minimalMode = false, ti
   h1 { margin-bottom: 4px; color: #fff; }
   .meta { color: #888; font-size: 12px; margin-bottom: 20px; }
   h2 { margin-top: 28px; border-bottom: 1px solid #333; padding-bottom: 4px; color: #eee; }
-  ol.steps { padding-left: 24px; margin: 8px 0 0; }
-  ol.steps li { margin: 0 0 8px; line-height: 1.45; }
+  ol.steps { padding: 0; margin: 12px 0 0; list-style: none;
+             display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 16px; }
+  ol.steps li { margin: 0; line-height: 1.45;
+                background: #202020; border: 1px solid #303030; border-radius: 8px; overflow: hidden;
+                break-inside: avoid; }
+  ol.steps .step-n { padding: 6px 10px; background: #2a2a2a; color: #ff9d2e; font-weight: 700;
+                     font-family: ui-monospace, Menlo, monospace; font-size: 12px; }
+  ol.steps .step-img { display: block; width: 100%; background: #14181c; }
+  ol.steps .step-text { padding: 8px 10px; font-size: 12px; color: #ccc; }
   ol.steps b { color: #4acfff; font-family: ui-monospace, Menlo, monospace; }
   ol.steps em { color: #e0a04a; font-style: normal; }
+  @media print {
+    ol.steps { grid-template-columns: repeat(2, 1fr); }
+    ol.steps li { border-color: #999; }
+  }
   table { width: 100%; border-collapse: collapse; }
   th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid #2a2a2a; vertical-align: top; }
   th { background: #242424; color: #aaa; font-weight: normal; }
@@ -428,7 +450,10 @@ export function openExportView(doc, screenshotDataUrl, { minimalMode = false, ti
 </script>
 </body></html>`;
 
-  const w = window.open("", "_blank");
+  // Callers that need to render first pass a window they opened during the
+  // click itself — opening one after an await trips popup blockers.
+  const w = win || window.open("", "_blank");
+  if (!w) return;
   w.document.open();
   w.document.write(html);
   w.document.close();
