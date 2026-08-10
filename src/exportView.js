@@ -12,8 +12,10 @@ export function openExportView(doc, screenshotDataUrl, {
   const { cutRows, panelRows, hardware, nConn, drillingRows } = computeBom(doc, { minimalMode });
 
   const cutHtml = cutRows.length
-    ? cutRows.map((r) => `<tr><td>${fmtIn(r.length)}</td><td>${r.qty}</td></tr>`).join("")
-    : `<tr><td colspan="2"><em>none</em></td></tr>`;
+    ? cutRows.map((r) =>
+        `<tr><td class="pl">${r.letter}</td><td>${fmtIn(r.length)}</td><td class="qty">${r.qty}</td></tr>`
+      ).join("")
+    : `<tr><td colspan="3"><em>none</em></td></tr>`;
   const MATERIAL_LABEL = {
     plywood: 'Hardboard (3/16")',
     pegboard: 'Peg Board (1/8")',
@@ -32,8 +34,10 @@ export function openExportView(doc, screenshotDataUrl, {
   const panelCutListHtml = panelRows.length
     ? [...panelsByMaterial.entries()].map(([material, rows]) => `
         <h3 style="margin-top:14px;color:#ccc;font-size:14px;">${MATERIAL_LABEL[material] || material}</h3>
-        <table><thead><tr><th>Size</th><th class="qty">Qty</th></tr></thead><tbody>
-          ${rows.map((r) => `<tr><td>${fmtIn(r.w)} × ${fmtIn(r.h)}</td><td>${r.qty}</td></tr>`).join("")}
+        <table><thead><tr><th>Part</th><th>Size</th><th class="qty">Qty</th></tr></thead><tbody>
+          ${rows.map((r) =>
+            `<tr><td class="pl">${r.letter}</td><td>${fmtIn(r.w)} × ${fmtIn(r.h)}</td><td class="qty">${r.qty}</td></tr>`
+          ).join("")}
         </tbody></table>
       `).join("")
     : `<table><tbody><tr><td colspan="2"><em>none</em></td></tr></tbody></table>`;
@@ -148,11 +152,11 @@ export function openExportView(doc, screenshotDataUrl, {
     }).join("") +
     `</ol>`;
 
-  const partsKeyHtml = asm.parts.length
-    ? `<table><thead><tr><th>Part</th><th>Description</th><th>Position</th></tr></thead><tbody>` +
-      asm.parts.map((p) =>
-        `<tr><td><b>${p.key}</b></td><td>${p.detail}</td>` +
-        `<td style="color:#999;font-family:ui-monospace,Menlo,monospace;font-size:12px;">${p.at}</td></tr>`
+  // One row per distinct part, not per stick — "A × 8", not A1…A8.
+  const partsKeyHtml = (asm.groups || []).length
+    ? `<table><thead><tr><th>Part</th><th>Description</th><th class="qty">Qty</th></tr></thead><tbody>` +
+      asm.groups.map((g) =>
+        `<tr><td class="pl">${g.letter}</td><td>${g.detail}</td><td class="qty">× ${g.qty}</td></tr>`
       ).join("") +
       `</tbody></table>`
     : "";
@@ -209,10 +213,8 @@ export function openExportView(doc, screenshotDataUrl, {
   ol.steps .step-text { padding: 8px 10px; font-size: 12px; color: #ccc; }
   ol.steps b { color: #4acfff; font-family: ui-monospace, Menlo, monospace; }
   ol.steps em { color: #e0a04a; font-style: normal; }
-  @media print {
-    ol.steps { grid-template-columns: repeat(2, 1fr); }
-    ol.steps li { border-color: #999; }
-  }
+  .pl { color: #ff9d2e; font-weight: 700; font-family: ui-monospace, Menlo, monospace; }
+
   table { width: 100%; border-collapse: collapse; }
   th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid #2a2a2a; vertical-align: top; }
   th { background: #242424; color: #aaa; font-weight: normal; }
@@ -225,16 +227,32 @@ export function openExportView(doc, screenshotDataUrl, {
   a { color: #4acfff; }
   button { margin-left: 8px; padding: 4px 10px; background: #333; color: #eee; border: 1px solid #444; border-radius: 3px; cursor: pointer; }
   button:hover { background: #444; }
+  /* The screen theme is dark. Printing it drops the background and leaves pale
+     text on white paper, so restate the whole document in black on white. */
   @media print {
     :root { color-scheme: light; }
-    body { margin: 12mm; background: #fff; color: #222; }
-    h1 { color: #000; }
-    h2 { color: #000; border-color: #ddd; }
-    th, td { border-color: #eee; }
-    th { background: #f5f5f5; color: #555; }
-    .summary { background: #f9f9f9; border-color: #ddd; }
+    body { margin: 12mm; background: #fff; color: #000; max-width: none; }
+    h1, h2, h3, strong, b { color: #000; }
+    h2 { color: #000; border-color: #000; }
+    p, .meta, .step-text, td, th, li { color: #000; }
+    th, td { border-color: #999; }
+    th { background: #eee; color: #000; }
+    .summary { background: #f2f2f2; border-color: #999; color: #000; }
     img.screenshot { border-color: #ccc; }
     .stock-input { border: none; padding: 0; background: transparent; color: #000; }
+    .pl, ol.steps b { color: #000; }
+    ol.steps { grid-template-columns: repeat(2, 1fr); }
+    ol.steps li { border: 1px solid #000; background: #fff; }
+    /* Matches the screen rule's specificity, which a bare .step-text would not. */
+    ol.steps .step-text { color: #000; }
+    ol.steps .step-n { background: none; color: #000; border-bottom: 1px solid #000; font-size: 13px; }
+    ol.steps em { color: #000; font-style: italic; }
+    /* !important is needed here: much of the plan carries an inline colour
+       style from the generators, and an inline style outranks any selector. */
+    h3, p, div, span, li, td, th, .meta, .pl { color: #000 !important; }
+    svg { background: #fff !important; }
+    svg text { fill: #000 !important; }
+    svg rect, svg circle { stroke: #333 !important; }
     button, .no-print { display: none; }
   }
 </style></head>
@@ -246,7 +264,8 @@ export function openExportView(doc, screenshotDataUrl, {
   ${screenshotDataUrl ? `<img class="screenshot" src="${screenshotDataUrl}" alt="3D view"/>` : ""}
 
   <h2>Beam Cut List</h2>
-  <table><thead><tr><th>Length</th><th class="qty">Qty</th></tr></thead><tbody>${cutHtml}</tbody></table>
+  <table><thead><tr><th>Part</th><th>Length</th><th class="qty">Qty</th></tr></thead>
+  <tbody>${cutHtml}</tbody></table>
 
   <h2>Stock Plan</h2>
   <p>
@@ -266,8 +285,9 @@ export function openExportView(doc, screenshotDataUrl, {
   ${drillingRows ? `
   <h2>Drilling Instructions (minimal-hole mode)</h2>
   <p style="color:#888;font-size:12px;">
-    Each diagram shows a beam from the side. Face A holes are on top,
-    face B holes on the bottom. Mark one face of each beam as A before drilling.
+    Each diagram shows a beam from the side. Face 1 holes are on top,
+    face 2 holes on the bottom. Mark one face of each beam as face 1 before
+    drilling. Letters are the parts from the cut list.
   </p>
   ${drillingRows.length ? drillingRows.map((r) => {
     // SVG diagram: beam shown as a rectangle, holes as circles on face A (top) / face B (bottom).
@@ -280,8 +300,8 @@ export function openExportView(doc, screenshotDataUrl, {
     const bx = padL, by = padY;
     const holeR = 5;
 
-    const aHoles = r.holes.filter((h) => h.face.includes("A"));
-    const bHoles = r.holes.filter((h) => h.face.includes("B"));
+    const aHoles = r.holes.filter((h) => h.face.includes("1"));
+    const bHoles = r.holes.filter((h) => h.face.includes("2"));
 
     const holeSvg = (holes, cy, color) => holes.map((h) => {
       const cx = bx + (h.fromStart / r.length) * beamW;
@@ -292,6 +312,7 @@ export function openExportView(doc, screenshotDataUrl, {
     return `
       <div style="margin:16px 0;">
         <div style="color:#ccc;font-size:12px;margin-bottom:4px;">
+          <span class="pl">${r.letter}${r.variant ? ` (pattern ${r.variant})` : ""}</span>
           <strong>${fmtIn(r.length)}</strong> beam × ${r.qty}
         </div>
         <svg width="${svgW}" height="${svgH}" viewBox="0 0 ${svgW} ${svgH}" style="background:#111;border:1px solid #333;border-radius:4px;">
@@ -300,8 +321,8 @@ export function openExportView(doc, screenshotDataUrl, {
           <!-- Length dimension -->
           <text x="${bx + beamW + 6}" y="${by + beamH / 2 + 4}" fill="#888" font-size="10" font-family="ui-monospace,Menlo,monospace">${fmtIn(r.length)}</text>
           <!-- Face labels -->
-          <text x="${bx - 2}" y="${by - 4}" fill="#4acfff" font-size="9" font-family="sans-serif">A</text>
-          <text x="${bx - 2}" y="${by + beamH + 12}" fill="#ff8844" font-size="9" font-family="sans-serif">B</text>
+          <text x="${bx - 2}" y="${by - 4}" fill="#4acfff" font-size="9" font-family="sans-serif">1</text>
+          <text x="${bx - 2}" y="${by + beamH + 12}" fill="#ff8844" font-size="9" font-family="sans-serif">2</text>
           <!-- Face A holes (top edge) -->
           ${holeSvg(aHoles, by, "#4acfff")}
           <!-- Face B holes (bottom edge) -->

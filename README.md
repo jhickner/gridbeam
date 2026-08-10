@@ -29,6 +29,9 @@ Everything is in inches and snapped to the 1.5" grid.
 - Construction plan: a numbered, illustrated assembly order derived from the
   bolted connections — one rendered diagram per step showing the piece so far
   with the part being added highlighted, on a fixed camera
+- Parts are lettered (A, B, C…) with identical parts sharing a letter, and the
+  same letters run through the cut list, drilling instructions and steps
+- The whole plan prints black on white, diagrams included
 - Named projects stored in the browser, with whole-store backup and restore
 - Import gallery: preview any number of saved JSON files as 3D thumbnails
   before choosing which to import

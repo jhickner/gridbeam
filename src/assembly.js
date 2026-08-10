@@ -2,6 +2,7 @@ import { fmtIn } from "./grid.js";
 import { bbox } from "./state.js";
 import { computeConnections } from "./connections.js";
 import { fixtureLabel } from "./fixtures.js";
+import { computePartLabels } from "./partLabels.js";
 
 // Turns a finished design into an assembly order.
 //
@@ -33,7 +34,6 @@ function beamRole(o) {
   return o.axis === "y" ? "upright" : "rail";
 }
 
-const ROLE_PREFIX = { upright: "U", rail: "R", rafter: "F" };
 const ROLE_NOUN = { upright: "Upright", rail: "Rail", rafter: "Rafter" };
 
 function orientationOf(o) {
@@ -76,21 +76,25 @@ export function buildAssembly(doc, connections = null) {
     neighbours.get(bolt.b).add(bolt.a);
   }
 
-  // Label every beam by role, numbered bottom-up so U1/R1 are near the floor.
+  // Identical parts share a letter — the label names the cut, not the stick,
+  // so it matches the cut list and drilling instructions.
+  const labels = computePartLabels(doc);
   const lowY = new Map();
   for (const o of doc.objects) lowY.set(o.id, bbox(o)[0][1]);
-  const roleCounters = { upright: 0, rail: 0, rafter: 0 };
   const parts = new Map(); // id → { key, role, obj, detail }
 
   const byHeight = (a, b) => (lowY.get(a.id) - lowY.get(b.id)) || String(a.id).localeCompare(String(b.id));
   for (const o of [...beams].sort(byHeight)) {
-    const role = beamRole(o);
-    const key = `${ROLE_PREFIX[role]}${++roleCounters[role]}`;
-    parts.set(o.id, { key, role, obj: o, detail: describe(o), at: at(o.pos) });
+    parts.set(o.id, {
+      key: labels.byId.get(o.id), role: beamRole(o), obj: o,
+      detail: describe(o), at: at(o.pos),
+    });
   }
-  let panelN = 0;
   for (const o of [...panels].sort(byHeight)) {
-    parts.set(o.id, { key: `P${++panelN}`, role: "panel", obj: o, detail: describe(o), at: at(o.pos) });
+    parts.set(o.id, {
+      key: labels.byId.get(o.id), role: "panel", obj: o,
+      detail: describe(o), at: at(o.pos),
+    });
   }
 
   // Greedy build order over the beams: prefer a part bolted to what's already
@@ -116,8 +120,16 @@ export function buildAssembly(doc, connections = null) {
     placed.add(best);
 
     const nb = neighbours.get(best) || new Set();
-    const joinedTo = [...nb].filter((n) => placed.has(n) && n !== best)
-      .map((n) => ({ key: parts.get(n) ? parts.get(n).key : "?", bolts: pairCount.get(pairKey(best, n)) || 0 }))
+    const perLetter = new Map();
+    for (const n of nb) {
+      if (!placed.has(n) || n === best) continue;
+      const key = parts.get(n) ? parts.get(n).key : "?";
+      const e = perLetter.get(key) || { key, count: 0, bolts: 0 };
+      e.count++;
+      e.bolts += pairCount.get(pairKey(best, n)) || 0;
+      perLetter.set(key, e);
+    }
+    const joinedTo = [...perLetter.values()]
       .sort((x, y) => x.key.localeCompare(y.key, undefined, { numeric: true }));
     order.push({ id: best, joinedTo, bolts: joinedTo.reduce((n, j) => n + j.bolts, 0) });
   }
@@ -132,7 +144,9 @@ export function buildAssembly(doc, connections = null) {
     } else if (!entry.joinedTo.length) {
       action = `Position <b>${part.key}</b> — ${part.detail} — at ${at(part.obj.pos)}. <em>No bolted connection inferred; set it by measurement.</em>`;
     } else {
-      const to = entry.joinedTo.map((j) => `<b>${j.key}</b> (${j.bolts} bolt${j.bolts === 1 ? "" : "s"})`).join(", ");
+      const to = entry.joinedTo.map((j) =>
+        `${j.count > 1 ? `${j.count}× ` : ""}<b>${j.key}</b> (${j.bolts} bolt${j.bolts === 1 ? "" : "s"})`
+      ).join(", ");
       action = `${noun} <b>${part.key}</b> — ${part.detail} — at ${at(part.obj.pos)}. Bolt to ${to}.`;
     }
     steps.push({ id: entry.id, key: part.key, bolts: entry.bolts, html: action });
@@ -162,6 +176,7 @@ export function buildAssembly(doc, connections = null) {
 
   return {
     parts: [...parts.values()],
+    groups: labels.groups,
     frameSteps: steps,
     panelSteps,
     extraSteps,

@@ -1,4 +1,5 @@
 import { computeConnections } from "./connections.js";
+import { computePartLabels, panelGroupKey } from "./partLabels.js";
 import { fmtIn, holeOffsets } from "./grid.js";
 
 // First-Fit-Decreasing bin-packing of cut lengths into stock boards.
@@ -34,18 +35,22 @@ export function computeBom(doc, { minimalMode = false, connections = null } = {}
   const beams = doc.objects.filter((o) => o.type === "beam");
   const panels = doc.objects.filter((o) => o.type === "panel");
   const { bolts, boltedHoles } = connections || computeConnections(doc);
+  const labels = computePartLabels(doc);
+  const letterOf = (key) => (labels.byKey.get(key) || {}).letter || "";
 
   const cutList = {};
   for (const b of beams) cutList[b.length] = (cutList[b.length] || 0) + 1;
   const cutRows = Object.entries(cutList)
-    .map(([len, qty]) => ({ length: +len, qty }))
+    .map(([len, qty]) => ({ length: +len, qty, letter: letterOf(`beam|${+len}`) }))
     .sort((a, b) => b.length - a.length);
 
   const panelList = {};
   for (const p of panels) {
     const material = p.material || "plywood";
     const key = `${p.w}x${p.h}:${material}`;
-    panelList[key] = panelList[key] || { w: p.w, h: p.h, material, qty: 0 };
+    panelList[key] = panelList[key] || {
+      w: p.w, h: p.h, material, qty: 0, letter: letterOf(panelGroupKey(p)),
+    };
     panelList[key].qty++;
   }
   const panelRows = Object.values(panelList).sort((a, b) => b.w * b.h - a.w * a.h);
@@ -60,12 +65,13 @@ export function computeBom(doc, { minimalMode = false, connections = null } = {}
 
   // Minimal-mode drilling instructions: grouped by beam length and hole
   // pattern. Each hole is measured as distance from the nearest end and
-  // labeled with its face (A or B). For a beam, the two perpendicular
-  // drill directions are called face A (first perp axis) and face B
-  // (second perp axis), matching the rendering convention:
-  //   beam along X → A = Y direction, B = Z direction
-  //   beam along Y → A = X direction, B = Z direction
-  //   beam along Z → A = X direction, B = Y direction
+  // labeled with its face (1 or 2). For a beam, the two perpendicular drill
+  // directions are called face 1 (first perp axis) and face 2 (second perp
+  // axis), matching the rendering convention:
+  //   beam along X → 1 = Y direction, 2 = Z direction
+  //   beam along Y → 1 = X direction, 2 = Z direction
+  //   beam along Z → 1 = X direction, 2 = Y direction
+  // Numbers, not letters — letters name the parts.
   let drillingRows = null;
   if (minimalMode) {
     const perpsOf = (axis) => axis === "x" ? ["y", "z"] : axis === "y" ? ["x", "z"] : ["x", "y"];
@@ -90,7 +96,7 @@ export function computeBom(doc, { minimalMode = false, connections = null } = {}
         // Always measure from the same end (hole-index-0 side).
         const fromStart = +off.toFixed(3);
         const fromEnd = +(b.length - off).toFixed(3);
-        const faceLabels = [...axes].map((ax) => ax === perps[0] ? "A" : "B").sort();
+        const faceLabels = [...axes].map((ax) => ax === perps[0] ? "1" : "2").sort();
         const face = faceLabels.join("+");
         holes.push({ fromStart, fromEnd, face });
       }
@@ -100,9 +106,22 @@ export function computeBom(doc, { minimalMode = false, connections = null } = {}
       groups.get(key).qty++;
     }
     drillingRows = [...groups.values()].sort((a, b) => b.length - a.length);
+    // A length can need more than one hole pattern; those share a cut letter,
+    // so number the variants to keep them apart.
+    const perLength = new Map();
+    for (const r of drillingRows) perLength.set(r.length, (perLength.get(r.length) || 0) + 1);
+    const seenOfLength = new Map();
+    for (const r of drillingRows) {
+      r.letter = letterOf(`beam|${r.length}`);
+      if (perLength.get(r.length) > 1) {
+        const n = (seenOfLength.get(r.length) || 0) + 1;
+        seenOfLength.set(r.length, n);
+        r.variant = n;
+      }
+    }
   }
 
-  return { cutRows, panelRows, hardware, nConn, fmtIn, drillingRows };
+  return { cutRows, panelRows, hardware, nConn, fmtIn, drillingRows, labels };
 }
 
 // ---------------------------------------------------------------------------

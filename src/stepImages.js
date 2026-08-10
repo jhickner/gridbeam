@@ -8,7 +8,15 @@ import { buildRoot, addLights, frame } from "./gallery.js";
 // Every mesh is built once and then shown or hidden per step — rebuilding the
 // scene each time would be quadratic, and a 150-part design would crawl.
 
-const HIGHLIGHT = 0xff9d2e;
+// Diagram palette, chosen to survive a black-and-white printer: white paper,
+// mid-grey for what is already built, near-black for the part going on now.
+// The model's own wood and panel colours are dropped — in greyscale they all
+// collapse to the same washed-out tone.
+const PAPER = 0xffffff;
+const PLACED = 0xb4b4b4;
+const NEW_PART = 0x1a1a1a;
+const GRID_MAJOR = 0xcfcfcf;
+const GRID_MINOR = 0xe4e4e4;
 
 // Big models get smaller frames: the images are inlined as data URLs, so the
 // plan's file size is roughly steps × frame area.
@@ -28,11 +36,11 @@ export async function renderAssemblySteps(doc, orderedIds, { quality = 0.72, onP
   const renderer = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true });
   renderer.setPixelRatio(1);
   renderer.setSize(W, H);
-  renderer.setClearColor(0x14181c, 1);
+  renderer.setClearColor(PAPER, 1);
 
   const scene = new THREE.Scene();
   addLights(scene);
-  const grid = new THREE.GridHelper(240, 160, 0x2a2a2a, 0x222222);
+  const grid = new THREE.GridHelper(240, 160, GRID_MAJOR, GRID_MINOR);
   scene.add(grid);
 
   const meshById = new Map();
@@ -45,27 +53,19 @@ export async function renderAssemblySteps(doc, orderedIds, { quality = 0.72, onP
   if (box.isEmpty()) { camera.position.set(40, 50, 60); camera.lookAt(0, 0, 0); }
   else frame(camera, box, W / H, 1.35);
 
-  const highlightMat = new THREE.MeshStandardMaterial({
-    color: HIGHLIGHT, roughness: 0.5, emissive: HIGHLIGHT, emissiveIntensity: 0.35,
-  });
+  const placedMat = new THREE.MeshStandardMaterial({ color: PLACED, roughness: 0.85 });
+  const newMat = new THREE.MeshStandardMaterial({ color: NEW_PART, roughness: 0.7 });
 
-  for (const g of meshById.values()) g.visible = false;
+  // Everything wears the flat diagram grey; only the part being added differs.
+  for (const g of meshById.values()) {
+    g.visible = false;
+    g.traverse((c) => { if (c.isMesh) c.material = placedMat; });
+  }
 
-  // Swap a part's materials for the highlight, remembering what to put back.
-  const saved = [];
   const setHighlight = (id, on) => {
     const g = meshById.get(id);
     if (!g) return;
-    if (on) {
-      g.traverse((c) => {
-        if (!c.isMesh) return;
-        saved.push([c, c.material]);
-        c.material = highlightMat;
-      });
-    } else {
-      for (const [mesh, mat] of saved) mesh.material = mat;
-      saved.length = 0;
-    }
+    g.traverse((c) => { if (c.isMesh) c.material = on ? newMat : placedMat; });
   };
 
   const images = [];
@@ -94,7 +94,8 @@ export async function renderAssemblySteps(doc, orderedIds, { quality = 0.72, onP
   });
   grid.geometry.dispose();
   grid.material.dispose();
-  highlightMat.dispose();
+  placedMat.dispose();
+  newMat.dispose();
   renderer.dispose();
 
   return images;
