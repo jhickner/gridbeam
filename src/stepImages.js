@@ -47,9 +47,15 @@ export async function renderAssemblySteps(doc, orderedIds, { quality = 0.72, onP
   const root = buildRoot(doc, meshById);
   scene.add(root);
 
-  // Frame on the finished piece, then hold that camera for every step.
+  // Frame on the finished piece, then hold that camera for every step. The box
+  // is built from the parts that actually get placed, so cosmetic fixtures —
+  // which are never shown — can't push the framing out.
   const camera = new THREE.PerspectiveCamera(40, W / H, 0.5, 4000);
-  const box = new THREE.Box3().setFromObject(root);
+  const box = new THREE.Box3();
+  for (const id of ids) {
+    const g = meshById.get(id);
+    if (g) box.expandByObject(g);
+  }
   if (box.isEmpty()) { camera.position.set(40, 50, 60); camera.lookAt(0, 0, 0); }
   else frame(camera, box, W / H, 1.35);
 

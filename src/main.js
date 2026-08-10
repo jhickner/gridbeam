@@ -1444,8 +1444,7 @@ document.getElementById("btn-export").onclick = async () => {
   const data = renderer.domElement.toDataURL("image/png");
   const doc = getDoc();
   const assembly = buildAssembly(doc);
-  const stepIds = [...assembly.frameSteps, ...assembly.panelSteps, ...assembly.extraSteps]
-    .map((s) => s.id);
+  const stepIds = [...assembly.frameSteps, ...assembly.panelSteps].map((s) => s.id);
 
   // Claim the window inside the click, before any await — otherwise the popup
   // blocker rejects it.

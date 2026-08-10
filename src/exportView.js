@@ -171,10 +171,6 @@ export function openExportView(doc, screenshotDataUrl, {
     assemblySections += `<h3>Panels</h3>${stepList(asm.panelSteps, stepNo)}`;
     stepNo += asm.panelSteps.length;
   }
-  if (asm.extraSteps.length) {
-    assemblySections += `<h3>Fitted items</h3>${stepList(asm.extraSteps, stepNo)}`;
-    stepNo += asm.extraSteps.length;
-  }
 
   const assemblyHtml = asm.parts.length
     ? `<p style="color:#888;font-size:12px;">

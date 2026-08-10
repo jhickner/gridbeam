@@ -1,7 +1,6 @@
 import { fmtIn } from "./grid.js";
 import { bbox } from "./state.js";
 import { computeConnections } from "./connections.js";
-import { fixtureLabel } from "./fixtures.js";
 import { computePartLabels } from "./partLabels.js";
 
 // Turns a finished design into an assembly order.
@@ -59,9 +58,10 @@ function describe(o) {
 export function buildAssembly(doc, connections = null) {
   const { bolts } = connections || computeConnections(doc);
 
+  // Fixtures and book rows are cosmetic — they show scale in the editor and
+  // are not built, so they stay out of the plan and out of its diagrams.
   const beams = doc.objects.filter((o) => o.type === "beam");
   const panels = doc.objects.filter((o) => o.type === "panel");
-  const extras = doc.objects.filter((o) => o.type === "fixture");
 
   // Bolt counts per unordered pair, and the adjacency that follows from them.
   const pairKey = (a, b) => (a < b ? `${a}|${b}` : `${b}|${a}`);
@@ -99,40 +99,84 @@ export function buildAssembly(doc, connections = null) {
   }
 
   // Greedy build order, ordered by what will physically stand up while you
-  // work on it. A part is self-supporting if it sits on the ground, or if it
-  // bolts to two or more parts already placed — a rail spanning two uprights
-  // holds itself. A part bolted at only one point is a cantilever: it flops
-  // around and has to be held. So stable candidates go first, and among those
-  // the best braced, then the lowest.
+  // work on it. A part holds itself if it sits on the ground, or if the bolts
+  // already holding it straddle its own centre — a rail spanning two uprights
+  // stands, but two bolts clustered at one end leave the rest of it hanging in
+  // the air, and someone has to hold that. Counting joints is not enough: what
+  // matters is where along the part they land.
+  //
+  // Bracing an end that is already hanging outranks everything else, so the
+  // build never accumulates loose ends waiting on each other.
   const GROUND = 0.05;
+  // Bolts must span at least this fraction of the part to brace it rather than
+  // just pivot it.
+  const SPAN = 0.25;
+
+  // Each part's long axis, and every bolt on it projected onto that axis. The
+  // longest bbox side is the long axis — true for tilted beams too, since a
+  // tilt never turns a beam's length into its shortest side.
+  const support = new Map();
+  for (const o of [...beams, ...panels]) {
+    const [mn, mx] = bbox(o);
+    let k = 0;
+    for (let i = 1; i < 3; i++) if (mx[i] - mn[i] > mx[k] - mn[k]) k = i;
+    support.set(o.id, { k, mid: (mn[k] + mx[k]) / 2, ext: mx[k] - mn[k], at: [] });
+  }
+  for (const bolt of bolts) {
+    if (!bolt.a || !bolt.b || bolt.a === bolt.b) continue;
+    for (const [self, other] of [[bolt.a, bolt.b], [bolt.b, bolt.a]]) {
+      const s = support.get(self);
+      if (s) s.at.push({ other, p: bolt.pos[s.k] });
+    }
+  }
+
+  const standsAlone = (id, placedSet) => {
+    if (lowY.get(id) <= GROUND) return true;
+    const s = support.get(id);
+    if (!s) return false;
+    let lo = Infinity, hi = -Infinity;
+    for (const b of s.at) {
+      if (!placedSet.has(b.other)) continue;
+      if (b.p < lo) lo = b.p;
+      if (b.p > hi) hi = b.p;
+    }
+    return lo <= s.mid && hi >= s.mid && hi - lo >= SPAN * s.ext;
+  };
+
   const placed = new Set();
   const order = [];
   const remaining = new Set(beams.map((o) => o.id));
+  const hanging = new Set(); // placed, but still cantilevered
 
   while (remaining.size) {
-    let best = null, bestScore = null, bestJoins = 0;
+    let best = null, bestScore = null, bestFixes = [];
     for (const id of remaining) {
-      const nb = neighbours.get(id) || new Set();
+      const nb = neighbours.get(id) || EMPTY;
       let joins = 0, boltsToPlaced = 0;
       for (const n of nb) {
         if (placed.has(n)) { joins++; boltsToPlaced += pairCount.get(pairKey(id, n)) || 0; }
       }
-      const onGround = lowY.get(id) <= GROUND;
-      const standsAlone = onGround || joins >= 2;
+      let fixes = [];
+      if (hanging.size) {
+        const after = new Set(placed).add(id);
+        for (const w of hanging) if (standsAlone(w, after)) fixes.push(w);
+      }
       // Nothing placed yet: start on the ground, best connected, lowest.
       const score = [
-        standsAlone ? 0 : 1,
+        hanging.size && !fixes.length ? 1 : 0, // brace what is already hanging
+        -fixes.length,
+        standsAlone(id, placed) ? 0 : 1,
         joins > 0 || placed.size === 0 ? 0 : 1, // don't strand a piece if we can help it
         -joins,
         -boltsToPlaced,
         lowY.get(id),
         String(id),
       ];
-      if (!bestScore || cmp(score, bestScore) < 0) { bestScore = score; best = id; bestJoins = joins; }
+      if (!bestScore || cmp(score, bestScore) < 0) { bestScore = score; best = id; bestFixes = fixes; }
     }
     remaining.delete(best);
     placed.add(best);
-    const needsSupport = bestJoins < 2 && lowY.get(best) > GROUND && placed.size > 1;
+    for (const w of bestFixes) hanging.delete(w);
 
     const nb = neighbours.get(best) || new Set();
     const perLetter = new Map();
@@ -146,8 +190,18 @@ export function buildAssembly(doc, connections = null) {
     }
     const joinedTo = [...perLetter.values()]
       .sort((x, y) => x.key.localeCompare(y.key, undefined, { numeric: true }));
+
+    const needsSupport = placed.size > 1 && joinedTo.length > 0 && !standsAlone(best, placed);
+    // Only chase a hanging end that something still to come can actually brace.
+    // A design with a genuine permanent cantilever would otherwise leave the
+    // set non-empty forever, switching the bracing priority off for good.
+    if (needsSupport &&
+        [...remaining].some((rid) => standsAlone(best, new Set(placed).add(rid)))) {
+      hanging.add(best);
+    }
+
     order.push({
-      id: best, joinedTo, needsSupport,
+      id: best, joinedTo, needsSupport, braces: bestFixes,
       bolts: joinedTo.reduce((n, j) => n + j.bolts, 0),
     });
   }
@@ -171,28 +225,28 @@ export function buildAssembly(doc, connections = null) {
       ).join(", ");
       action = `${noun} <b>${part.key}</b> — ${part.detail} — at ${at(part.obj.pos)}. Bolt to ${to}.`;
     }
-    // A single bolt off the ground is a pivot, not a joint — say so, because
-    // the next step is what actually makes it rigid.
+    if (entry.braces.length) {
+      const keys = [...new Set(entry.braces.map((b) => (parts.get(b) || { key: "?" }).key))]
+        .sort((x, y) => x.localeCompare(y, undefined, { numeric: true }));
+      action += ` This braces <b>${keys.join("</b>, <b>")}</b> — no need to hold it any longer.`;
+    }
+    // Bolts clustered at one end are a pivot, not a joint — say so, because the
+    // next step is what actually makes it rigid.
     if (entry.needsSupport && entry.joinedTo.length) {
-      action += ` <em>Held on one joint only — support it until the next part goes on.</em>`;
+      action += ` <em>Bolted at one end only — hold or prop the free end until the next part goes on.</em>`;
     }
     steps.push({
       id: entry.id, key: part.key, bolts: entry.bolts,
-      needsSupport: entry.needsSupport, html: action,
+      needsSupport: entry.needsSupport, braces: entry.braces.length, html: action,
     });
   });
 
-  // Panels and fixtures go on once the frame stands.
+  // Panels go on once the frame stands.
   const panelSteps = [...panels].sort(byHeight).map((o) => {
     const part = parts.get(o.id);
     return { id: o.id, key: part.key, bolts: 0,
       html: `Fit <b>${part.key}</b> — ${part.detail} — at ${at(o.pos)}.` };
   });
-  const extraSteps = [...extras].sort(byHeight).map((o) => ({
-    id: o.id, key: "", bolts: 0,
-    html: `Place ${fixtureLabel(o.kind)} at ${at(o.pos)}. <em>Not part of the build — shown for fit.</em>`,
-  }));
-
   // Parts with no bolted connection anywhere in the model. This has to be a
   // property of the connection graph, not of placement order — legs standing
   // on the ground join nothing at the moment they go down, and are fine.
@@ -210,7 +264,6 @@ export function buildAssembly(doc, connections = null) {
     groups: labels.groups,
     frameSteps: steps,
     panelSteps,
-    extraSteps,
     totalBolts: bolts.length,
     floating: stranded.length,
     floatingRotated: strandedRotated,
