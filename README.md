@@ -27,8 +27,11 @@ Everything is in inches and snapped to the 1.5" grid.
 - Build plan export: beam cut list, 1D stock packing, 2D guillotine packing of
   panels onto 4'×8' sheets with SVG cut diagrams, hardware count and cost
 - Construction plan: a numbered, illustrated assembly order derived from the
-  bolted connections — one rendered diagram per step showing the piece so far
-  with the part being added highlighted, on a fixed camera
+  bolted connections — one rendered diagram per step showing the piece so far,
+  the part being added picked out in black inside a dashed callout, on a fixed
+  camera. Ordered so the piece stands up as you build: parts go on when they
+  reach the ground or span two placed parts, and a step left on a single joint
+  says so
 - Parts are lettered (A, B, C…) with identical parts sharing a letter, and the
   same letters run through the cut list, drilling instructions and steps
 - The whole plan prints black on white, diagrams included

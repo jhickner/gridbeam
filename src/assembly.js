@@ -35,6 +35,7 @@ function beamRole(o) {
 }
 
 const ROLE_NOUN = { upright: "Upright", rail: "Rail", rafter: "Rafter" };
+const EMPTY = new Set();
 
 function orientationOf(o) {
   if (o.tilt) return `tilted ${o.tilt > 0 ? "+" : ""}${o.tilt}° in the ${o.axis.toUpperCase()}Y plane`;
@@ -97,27 +98,41 @@ export function buildAssembly(doc, connections = null) {
     });
   }
 
-  // Greedy build order over the beams: prefer a part bolted to what's already
-  // standing (most bolts first), then whatever sits lowest. A design in several
-  // disconnected pieces restarts from the lowest unplaced part.
+  // Greedy build order, ordered by what will physically stand up while you
+  // work on it. A part is self-supporting if it sits on the ground, or if it
+  // bolts to two or more parts already placed — a rail spanning two uprights
+  // holds itself. A part bolted at only one point is a cantilever: it flops
+  // around and has to be held. So stable candidates go first, and among those
+  // the best braced, then the lowest.
+  const GROUND = 0.05;
   const placed = new Set();
   const order = [];
   const remaining = new Set(beams.map((o) => o.id));
 
   while (remaining.size) {
-    let best = null, bestScore = null;
+    let best = null, bestScore = null, bestJoins = 0;
     for (const id of remaining) {
       const nb = neighbours.get(id) || new Set();
       let joins = 0, boltsToPlaced = 0;
       for (const n of nb) {
         if (placed.has(n)) { joins++; boltsToPlaced += pairCount.get(pairKey(id, n)) || 0; }
       }
-      // Sort key: connected-first, then most bolts, then lowest, then stable id.
-      const score = [joins > 0 ? 0 : 1, -boltsToPlaced, lowY.get(id), String(id)];
-      if (!bestScore || cmp(score, bestScore) < 0) { bestScore = score; best = id; }
+      const onGround = lowY.get(id) <= GROUND;
+      const standsAlone = onGround || joins >= 2;
+      // Nothing placed yet: start on the ground, best connected, lowest.
+      const score = [
+        standsAlone ? 0 : 1,
+        joins > 0 || placed.size === 0 ? 0 : 1, // don't strand a piece if we can help it
+        -joins,
+        -boltsToPlaced,
+        lowY.get(id),
+        String(id),
+      ];
+      if (!bestScore || cmp(score, bestScore) < 0) { bestScore = score; best = id; bestJoins = joins; }
     }
     remaining.delete(best);
     placed.add(best);
+    const needsSupport = bestJoins < 2 && lowY.get(best) > GROUND && placed.size > 1;
 
     const nb = neighbours.get(best) || new Set();
     const perLetter = new Map();
@@ -131,7 +146,10 @@ export function buildAssembly(doc, connections = null) {
     }
     const joinedTo = [...perLetter.values()]
       .sort((x, y) => x.key.localeCompare(y.key, undefined, { numeric: true }));
-    order.push({ id: best, joinedTo, bolts: joinedTo.reduce((n, j) => n + j.bolts, 0) });
+    order.push({
+      id: best, joinedTo, needsSupport,
+      bolts: joinedTo.reduce((n, j) => n + j.bolts, 0),
+    });
   }
 
   const steps = [];
@@ -141,15 +159,27 @@ export function buildAssembly(doc, connections = null) {
     let action;
     if (i === 0) {
       action = `Lay out <b>${part.key}</b> — ${part.detail} — at ${at(part.obj.pos)}. This is the reference part; everything else is positioned from it.`;
-    } else if (!entry.joinedTo.length) {
+    } else if (!entry.joinedTo.length && !(neighbours.get(entry.id) || EMPTY).size) {
       action = `Position <b>${part.key}</b> — ${part.detail} — at ${at(part.obj.pos)}. <em>No bolted connection inferred; set it by measurement.</em>`;
+    } else if (!entry.joinedTo.length) {
+      // Bolts to parts that come later — typically another leg going down on
+      // the ground before anything spans them.
+      action = `Stand <b>${part.key}</b> — ${part.detail} — at ${at(part.obj.pos)}. It bolts to parts added further on.`;
     } else {
       const to = entry.joinedTo.map((j) =>
         `${j.count > 1 ? `${j.count}× ` : ""}<b>${j.key}</b> (${j.bolts} bolt${j.bolts === 1 ? "" : "s"})`
       ).join(", ");
       action = `${noun} <b>${part.key}</b> — ${part.detail} — at ${at(part.obj.pos)}. Bolt to ${to}.`;
     }
-    steps.push({ id: entry.id, key: part.key, bolts: entry.bolts, html: action });
+    // A single bolt off the ground is a pivot, not a joint — say so, because
+    // the next step is what actually makes it rigid.
+    if (entry.needsSupport && entry.joinedTo.length) {
+      action += ` <em>Held on one joint only — support it until the next part goes on.</em>`;
+    }
+    steps.push({
+      id: entry.id, key: part.key, bolts: entry.bolts,
+      needsSupport: entry.needsSupport, html: action,
+    });
   });
 
   // Panels and fixtures go on once the frame stands.
@@ -163,9 +193,10 @@ export function buildAssembly(doc, connections = null) {
     html: `Place ${fixtureLabel(o.kind)} at ${at(o.pos)}. <em>Not part of the build — shown for fit.</em>`,
   }));
 
-  // Parts that had nothing to bolt to when their turn came. The first part is
-  // excluded — it starts the build, so of course it joins nothing.
-  const stranded = order.slice(1).filter((e) => !e.joinedTo.length);
+  // Parts with no bolted connection anywhere in the model. This has to be a
+  // property of the connection graph, not of placement order — legs standing
+  // on the ground join nothing at the moment they go down, and are fine.
+  const stranded = order.filter((e) => !(neighbours.get(e.id) || EMPTY).size);
   // computeConnections skips beams inside a rotated group, so those always land
   // here. Counting them separately keeps the plan from calling a sound design
   // broken.

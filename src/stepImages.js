@@ -13,8 +13,8 @@ import { buildRoot, addLights, frame } from "./gallery.js";
 // The model's own wood and panel colours are dropped — in greyscale they all
 // collapse to the same washed-out tone.
 const PAPER = 0xffffff;
-const PLACED = 0xb4b4b4;
-const NEW_PART = 0x1a1a1a;
+const PLACED = 0xcbcbcb;
+const NEW_PART = 0x141414;
 const GRID_MAJOR = 0xcfcfcf;
 const GRID_MINOR = 0xe4e4e4;
 
@@ -68,6 +68,50 @@ export async function renderAssemblySteps(doc, orderedIds, { quality = 0.72, onP
     g.traverse((c) => { if (c.isMesh) c.material = on ? newMat : placedMat; });
   };
 
+  // The WebGL frame is composited onto a 2D canvas so a callout can be drawn
+  // over the part being added — tone alone is not enough to find it on a
+  // black-and-white print of a busy frame.
+  const out = document.createElement("canvas");
+  out.width = W; out.height = H;
+  const ctx = out.getContext("2d");
+
+  const corner = new THREE.Vector3();
+  function screenRectOf(group) {
+    const bb = new THREE.Box3().setFromObject(group);
+    if (bb.isEmpty()) return null;
+    let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+    for (let i = 0; i < 8; i++) {
+      corner.set(
+        i & 1 ? bb.max.x : bb.min.x,
+        i & 2 ? bb.max.y : bb.min.y,
+        i & 4 ? bb.max.z : bb.min.z
+      ).project(camera);
+      const px = (corner.x + 1) / 2 * W;
+      const py = (1 - corner.y) / 2 * H;
+      x0 = Math.min(x0, px); y0 = Math.min(y0, py);
+      x1 = Math.max(x1, px); y1 = Math.max(y1, py);
+    }
+    return { x0, y0, x1, y1 };
+  }
+
+  // Dashed black box with a white halo, so it reads over light and dark alike.
+  function drawCallout(r) {
+    const pad = 7;
+    const x = Math.max(1, r.x0 - pad), y = Math.max(1, r.y0 - pad);
+    const w = Math.min(W - 2, r.x1 + pad) - x, h = Math.min(H - 2, r.y1 + pad) - y;
+    if (!(w > 0 && h > 0)) return;
+    ctx.lineJoin = "round";
+    ctx.strokeStyle = "#fff";
+    ctx.lineWidth = 4;
+    ctx.setLineDash([]);
+    ctx.strokeRect(x, y, w, h);
+    ctx.strokeStyle = "#000";
+    ctx.lineWidth = 2;
+    ctx.setLineDash([7, 4]);
+    ctx.strokeRect(x, y, w, h);
+    ctx.setLineDash([]);
+  }
+
   const images = [];
   let previous = null;
   for (let i = 0; i < ids.length; i++) {
@@ -79,7 +123,12 @@ export async function renderAssemblySteps(doc, orderedIds, { quality = 0.72, onP
     previous = id;
 
     renderer.render(scene, camera);
-    images.push(renderer.domElement.toDataURL("image/jpeg", quality));
+    ctx.drawImage(renderer.domElement, 0, 0, W, H);
+    if (g) {
+      const r = screenRectOf(g);
+      if (r) drawCallout(r);
+    }
+    images.push(out.toDataURL("image/jpeg", quality));
 
     if (onProgress && (i % 8 === 0 || i === ids.length - 1)) {
       onProgress(i + 1, ids.length);
