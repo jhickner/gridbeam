@@ -48,11 +48,13 @@ export function computeConnections(doc) {
     occupiedHole.get(id).set(idx, axisLetter);
   };
   const seen = new Set();
-  const addBolt = (p, kind) => {
+  // `a`/`b` are the ids of the two parts the bolt joins — the assembly planner
+  // uses them as the connectivity graph.
+  const addBolt = (p, kind, a, b) => {
     const k = `${kind}|${p[0].toFixed(3)},${p[1].toFixed(3)},${p[2].toFixed(3)}`;
     if (seen.has(k)) return false;
     seen.add(k);
-    bolts.push({ pos: p, kind });
+    bolts.push({ pos: p, kind, a, b });
     return true;
   };
 
@@ -122,7 +124,7 @@ export function computeConnections(doc) {
           const { ai, bi, ha, hb } = matches[idx];
           if (isOccupiedDifferent(A.id, ai, axL) || isOccupiedDifferent(B.id, bi, axL)) continue;
           const mid = [(ha[0] + hb[0]) / 2, (ha[1] + hb[1]) / 2, (ha[2] + hb[2]) / 2];
-          if (addBolt(mid, "beam-beam")) {
+          if (addBolt(mid, "beam-beam", A.id, B.id)) {
             markHole(A.id, ai, axL);
             markHole(B.id, bi, axL);
           }
@@ -143,7 +145,7 @@ export function computeConnections(doc) {
           const axLetter = AXIS_LETTER[touchAxis];
           if (isOccupiedDifferent(A.id, ai, axLetter) || isOccupiedDifferent(B.id, bi, axLetter)) continue;
           const mid = [(ha[0] + hb[0]) / 2, (ha[1] + hb[1]) / 2, (ha[2] + hb[2]) / 2];
-          if (addBolt(mid, "beam-beam")) {
+          if (addBolt(mid, "beam-beam", A.id, B.id)) {
             const axisLetter = AXIS_LETTER[touchAxis];
             markHole(A.id, ai, axisLetter);
             markHole(B.id, bi, axisLetter);
@@ -170,7 +172,7 @@ export function computeConnections(doc) {
     if (rafters.length !== 2) continue;
     seenPeak.add(o.peak);
     const [p, q] = rafters.map((r) => r.apex);
-    addBolt([(p[0]+q[0])/2, (p[1]+q[1])/2, (p[2]+q[2])/2], "beam-beam");
+    addBolt([(p[0]+q[0])/2, (p[1]+q[1])/2, (p[2]+q[2])/2], "beam-beam", rafters[0].id, rafters[1].id);
   }
 
   // Feet: bolt where a rafter's foot rests on/into an untilted beam. The bolt
@@ -188,7 +190,7 @@ export function computeConnections(doc) {
           fc[2] >= mn[2]-m && fc[2] <= mx[2]+m) {
         const holes = beamHoleWorldPositions(o);
         const fi = (o.tilt || 0) >= 0 ? 0 : holes.length - 1; // hole nearest the foot
-        addBolt(holes[fi], "beam-beam");
+        addBolt(holes[fi], "beam-beam", o.id, s.id);
         markHole(o.id, fi, perpDir(o));
         break;
       }

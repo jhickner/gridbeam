@@ -1,5 +1,6 @@
 import { computeBom, expandCuts, expandPanels, groupPanelsByMaterial, packPanelSheets, SHEET_PRICES } from "./bom.js";
 import { fmtIn } from "./grid.js";
+import { buildAssembly } from "./assembly.js";
 
 const ESCAPES = { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" };
 const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ESCAPES[c]);
@@ -129,6 +130,54 @@ export function openExportView(doc, screenshotDataUrl, { minimalMode = false, ti
     panelTotalCost = plans.reduce((s, p) => s + p.cost, 0);
   }
 
+  // ---- Construction plan ----
+  const asm = buildAssembly(doc);
+  const stepList = (steps, startAt) =>
+    `<ol class="steps" start="${startAt}">` +
+    steps.map((s) => `<li>${s.html}</li>`).join("") +
+    `</ol>`;
+
+  const partsKeyHtml = asm.parts.length
+    ? `<table><thead><tr><th>Part</th><th>Description</th><th>Position</th></tr></thead><tbody>` +
+      asm.parts.map((p) =>
+        `<tr><td><b>${p.key}</b></td><td>${p.detail}</td>` +
+        `<td style="color:#999;font-family:ui-monospace,Menlo,monospace;font-size:12px;">${p.at}</td></tr>`
+      ).join("") +
+      `</tbody></table>`
+    : "";
+
+  let stepNo = 1;
+  let assemblySections = "";
+  if (asm.frameSteps.length) {
+    assemblySections += `<h3>Frame</h3>${stepList(asm.frameSteps, stepNo)}`;
+    stepNo += asm.frameSteps.length;
+  }
+  if (asm.panelSteps.length) {
+    assemblySections += `<h3>Panels</h3>${stepList(asm.panelSteps, stepNo)}`;
+    stepNo += asm.panelSteps.length;
+  }
+  if (asm.extraSteps.length) {
+    assemblySections += `<h3>Fitted items</h3>${stepList(asm.extraSteps, stepNo)}`;
+    stepNo += asm.extraSteps.length;
+  }
+
+  const assemblyHtml = asm.parts.length
+    ? `<p style="color:#888;font-size:12px;">
+         ${stepNo - 1} steps. Parts are added in an order where each one bolts to
+         something already standing, working from the ground up — one workable
+         sequence, not the only one. Cut and drill everything first.
+         ${asm.floating > 0
+           ? `<br><span style="color:#e0a04a;">${asm.floating} part${asm.floating === 1 ? " has" : "s have"}
+              no inferred bolted connection${asm.floatingRotated > 0
+                ? ` — ${asm.floatingRotated} of them sit in a rotated group, which the connection finder skips, so those are expected`
+                : ""}.</span>`
+           : ""}
+       </p>
+       <h3>Part key</h3>
+       ${partsKeyHtml}
+       ${assemblySections}`
+    : `<p style="color:#666;font-size:12px;">Nothing to assemble yet.</p>`;
+
   const html = `<!doctype html>
 <html><head><meta charset="utf-8"><title>${esc(planTitle)}</title>
 <style>
@@ -138,6 +187,10 @@ export function openExportView(doc, screenshotDataUrl, { minimalMode = false, ti
   h1 { margin-bottom: 4px; color: #fff; }
   .meta { color: #888; font-size: 12px; margin-bottom: 20px; }
   h2 { margin-top: 28px; border-bottom: 1px solid #333; padding-bottom: 4px; color: #eee; }
+  ol.steps { padding-left: 24px; margin: 8px 0 0; }
+  ol.steps li { margin: 0 0 8px; line-height: 1.45; }
+  ol.steps b { color: #4acfff; font-family: ui-monospace, Menlo, monospace; }
+  ol.steps em { color: #e0a04a; font-style: normal; }
   table { width: 100%; border-collapse: collapse; }
   th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid #2a2a2a; vertical-align: top; }
   th { background: #242424; color: #aaa; font-weight: normal; }
@@ -244,6 +297,9 @@ export function openExportView(doc, screenshotDataUrl, { minimalMode = false, ti
   <h2>Hardware</h2>
   <p style="color:#666;font-size:12px;">${nConn} bolted connection${nConn === 1 ? "" : "s"} inferred from proximity.</p>
   <table><thead><tr><th>Item</th><th class="qty">Qty</th></tr></thead><tbody>${hwHtml}</tbody></table>
+
+  <h2>Construction Plan</h2>
+  ${assemblyHtml}
 
   <h2>Total Cost</h2>
   <div id="total-cost-summary" class="summary"></div>
